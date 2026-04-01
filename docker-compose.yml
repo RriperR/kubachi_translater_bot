@@ -1,0 +1,25 @@
+services:
+  bot:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      - db
+    restart: always
+
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata_slovar:/var/lib/postgresql/data
+
+volumes:
+  pgdata_slovar:

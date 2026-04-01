@@ -1,0 +1,39 @@
+[project]
+name = "kubachi-slovar"
+version = "0.1.0"
+description = "Telegram bot for the Kubachi-Russian dictionary."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "aiogram==3.22.0",
+  "openpyxl==3.1.5",
+  "psycopg2-binary==2.9.9",
+  "python-dotenv==1.0.1",
+]
+
+[dependency-groups]
+dev = [
+  "pre-commit==4.1.0",
+]
+lint = [
+  "mypy==1.16.1",
+  "pydoclint==0.8.3",
+  "ruff==0.12.2",
+]
+test = [
+  "pytest==8.4.1",
+  "pytest-asyncio==1.0.0",
+  "pytest-cov==6.2.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.pydoclint]
+style = "google"
+arg-type-hints-in-docstring = false
+skip-checking-short-docstrings = false
+check-class-attributes = false
+allow-init-docstring = true
+check-return-types = false
+check-yield-types = false

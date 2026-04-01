@@ -1,0 +1,50 @@
+include = ["*.py", "*.pyi"]
+exclude = [
+  ".git",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".venv",
+  "__pycache__",
+  "build",
+  "dist",
+  "node_modules",
+  "venv",
+]
+respect-gitignore = true
+target-version = "py310"
+line-length = 100
+fix = false
+output-format = "concise"
+src = ["src", "tests"]
+
+[lint]
+preview = true
+select = [
+  "E",
+  "F",
+  "I",
+  "B",
+  "UP",
+  "SIM",
+  "D",
+  "DOC",
+  "N",
+  "S",
+]
+ignore = ["D415"]
+
+[lint.per-file-ignores]
+"src/main.py" = ["E402"]
+"tests/**/*.py" = ["D", "DOC", "S101", "ANN201"]
+"**/__init__.py" = ["F401"]
+
+[lint.pydocstyle]
+convention = "google"
+
+[format]
+quote-style = "double"
+docstring-code-format = true
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"

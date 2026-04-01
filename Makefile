@@ -1,0 +1,51 @@
+.PHONY: install install-lint install-test install-all \
+	lint doclint lint-fix format format-check type-check test test-critical test-with-coverage project-check run
+
+install:
+	uv sync
+
+install-lint:
+	uv sync --group lint
+
+install-test:
+	uv sync --group test
+
+install-all:
+	uv sync --all-groups
+
+lint:
+	uv run ruff check src
+	uv run --group lint pydoclint src
+
+doclint:
+	uv run --group lint pydoclint src
+
+lint-fix:
+	uv run ruff check src --fix
+
+format:
+	uv run ruff format src
+
+format-check:
+	uv run ruff format src --check
+
+type-check:
+	uv run mypy --config-file mypy.ini src
+
+test:
+	uv run pytest -p no:cacheprovider $(ARGS)
+
+test-critical:
+	uv run pytest -m critical -q -p no:cacheprovider $(ARGS)
+
+test-with-coverage:
+	uv run pytest --cov=src --cov-report=term-missing $(ARGS)
+
+project-check:
+	$(MAKE) lint
+	$(MAKE) format-check
+	$(MAKE) type-check
+	$(MAKE) test
+
+run:
+	uv run python src/main.py

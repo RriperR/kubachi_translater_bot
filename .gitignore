@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# Local environment
+.env
+.env.*
+
+# IDEs and editors
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Generated files
+*.log
+*.xlsx
+src/__pycache__/
+src/**/*.pyc
+
+# Local exports and backups
+*.csv
+*.sql
