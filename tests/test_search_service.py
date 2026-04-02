@@ -324,6 +324,7 @@ def test_complex_search_drops_semantic_noise_when_fuzzy_match_exists() -> None:
                     translation="вольный",
                 ),
                 score=72,
+                origin="semantic",
             )
         ]
     )
@@ -332,3 +333,39 @@ def test_complex_search_drops_semantic_noise_when_fuzzy_match_exists() -> None:
     results = service.search("првет", SearchMode.COMPLEX)
 
     assert [entry.title for entry in results] == ["салам - привет"]
+
+
+def test_complex_search_boosts_entries_supported_by_both_providers() -> None:
+    """Связка lexical и semantic совпадений должна поднимать статью
+    выше одиночного semantic-матча.
+    """
+    shared_entry = DictionaryEntry(
+        source=DictionarySource.CORE,
+        word="салам",
+        translation="привет",
+    )
+    stronger_semantic_entry = DictionaryEntry(
+        source=DictionarySource.CORE,
+        word="мастер",
+        translation="серебро",
+    )
+    service = DictionarySearchService(
+        providers=(
+            StaticSearchProvider(
+                [
+                    SearchMatch(entry=shared_entry, score=100, origin="lexical"),
+                    SearchMatch(entry=stronger_semantic_entry, score=30, origin="lexical"),
+                ]
+            ),
+            StaticSearchProvider(
+                [
+                    SearchMatch(entry=shared_entry, score=42, origin="semantic"),
+                    SearchMatch(entry=stronger_semantic_entry, score=92, origin="semantic"),
+                ]
+            ),
+        )
+    )
+
+    results = service.search("что говорят при встрече", SearchMode.COMPLEX)
+
+    assert [entry.title for entry in results] == ["салам - привет", "мастер - серебро"]

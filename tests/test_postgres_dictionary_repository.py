@@ -6,7 +6,7 @@ from pydantic import SecretStr
 
 from config import DatabaseConfig
 from models import DictionarySource
-from repositories.postgres_dictionary_repository import PostgresDictionaryRepository
+from repositories.postgres import PostgresDictionaryRepository
 
 
 def test_normalize_token_text_strips_punctuation_between_tokens() -> None:

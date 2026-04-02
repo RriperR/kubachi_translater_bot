@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 from models import SearchMatch, SearchMode, SemanticSearchCandidate
 from normalization import normalize_query, tokenize
-from repositories.postgres_dictionary_repository import PostgresDictionaryRepository
+from repositories.postgres import PostgresDictionaryRepository
 
 from .embeddings.base import EmbeddingProvider
 
@@ -110,7 +110,7 @@ class PgvectorSearchProvider:
             score = self._semantic_score(candidate.distance, candidate.chunk_type, overlap_count)
             if score <= 0:
                 continue
-            matches.append(SearchMatch(entry=candidate.entry, score=score))
+            matches.append(SearchMatch(entry=candidate.entry, score=score, origin="semantic"))
         return matches
 
     @staticmethod

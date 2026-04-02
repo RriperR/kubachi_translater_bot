@@ -80,7 +80,7 @@ class LexicalSearchProvider:
         for entry in self._load_entries(query, mode):
             score = self._match_score(entry, normalized_query, mode)
             if score > 0:
-                matches.append(SearchMatch(entry=entry, score=score))
+                matches.append(SearchMatch(entry=entry, score=score, origin="lexical"))
 
         return matches
 

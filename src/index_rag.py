@@ -7,7 +7,7 @@ import logging
 from config import load_config
 from models import DictionarySource
 from repositories.db_repository import PostgresRepository
-from repositories.postgres_dictionary_repository import PostgresDictionaryRepository
+from repositories.postgres import PostgresDictionaryRepository
 from services.rag import DictionaryRagIndexer, build_embedding_provider
 
 

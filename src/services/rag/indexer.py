@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from time import perf_counter
 
 from models import RagChunkRecord
-from repositories.postgres_dictionary_repository import PostgresDictionaryRepository
+from repositories.postgres import PostgresDictionaryRepository
 
 from .embeddings.base import EmbeddingProvider
 

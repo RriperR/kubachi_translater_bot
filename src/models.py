@@ -86,6 +86,7 @@ class SearchMatch:
 
     entry: DictionaryEntry
     score: int
+    origin: str = "lexical"
 
 
 @dataclass(frozen=True)

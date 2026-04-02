@@ -38,15 +38,16 @@ class DictionarySearchService:
         for provider in self._providers:
             matches.extend(provider.search(query, mode))
 
-        unique_matches: dict[tuple[str, str], SearchMatch] = {}
+        grouped_matches: dict[tuple[str, str], list[SearchMatch]] = {}
         for match in matches:
             key = (match.entry.source.value, match.entry.title)
-            previous = unique_matches.get(key)
-            if previous is None or match.score > previous.score:
-                unique_matches[key] = match
+            grouped_matches.setdefault(key, []).append(match)
 
+        reranked_matches = [
+            self._rerank_group(match_group, mode) for match_group in grouped_matches.values()
+        ]
         filtered_matches = self._filter_semantic_noise(
-            tuple(unique_matches.values()),
+            tuple(reranked_matches),
             query,
             mode,
         )
@@ -77,6 +78,33 @@ class DictionarySearchService:
             return matches
 
         return [match for match in matches if match.score >= 180]
+
+    @staticmethod
+    def _rerank_group(matches: Sequence[SearchMatch], mode: SearchMode) -> SearchMatch:
+        best_match = max(matches, key=lambda item: item.score)
+        if mode != SearchMode.COMPLEX:
+            return best_match
+
+        lexical_scores = [match.score for match in matches if match.origin == "lexical"]
+        semantic_scores = [match.score for match in matches if match.origin == "semantic"]
+        lexical_score = max(lexical_scores, default=0)
+        semantic_score = max(semantic_scores, default=0)
+
+        if lexical_score and semantic_score:
+            boost = min(semantic_score // 3, 28)
+            score = lexical_score + boost
+            if score < best_match.score:
+                score = best_match.score
+            return SearchMatch(entry=best_match.entry, score=score, origin=best_match.origin)
+
+        if semantic_score and len(matches) > 1:
+            support = min(sum(semantic_scores) // 6, 24)
+            score = semantic_score + support
+            if score < best_match.score:
+                score = best_match.score
+            return SearchMatch(entry=best_match.entry, score=score, origin=best_match.origin)
+
+        return best_match
 
     @staticmethod
     def _supports_fuzzy_fallback(query: str) -> bool:

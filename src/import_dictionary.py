@@ -8,7 +8,7 @@ from config import load_config
 from models import DictionarySource
 from repositories.csv_repository import MAIN_SCHEMA, USER_SCHEMA, CsvDictionaryRepository
 from repositories.db_repository import PostgresRepository
-from repositories.postgres_dictionary_repository import PostgresDictionaryRepository
+from repositories.postgres import PostgresDictionaryRepository
 
 BASE_DIR = Path(__file__).resolve().parent
 
