@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from models import DictionaryEntry, DictionarySource, SearchMatch, SearchMode
-from normalization import comma_values, count_occurrences, normalize_query, tokenize
+from normalization import comma_values, normalize_query, tokenize
 
 
 class EntryRepository(Protocol):
@@ -38,7 +38,7 @@ class SearchProvider(Protocol):
 
 
 class CsvSearchProvider:
-    """Поисковый провайдер поверх CSV-репозитория."""
+    """Поисковый провайдер поверх репозитория словарных статей."""
 
     def __init__(self, repository: EntryRepository) -> None:
         """Сохранить источник словарных статей для поиска.
@@ -49,7 +49,7 @@ class CsvSearchProvider:
         self._repository = repository
 
     def search(self, query: str, mode: SearchMode) -> list[SearchMatch]:
-        """Выполнить поиск по CSV-источнику.
+        """Выполнить поиск по источнику словарных статей.
 
         Args:
             query: Поисковый запрос пользователя.
@@ -98,23 +98,82 @@ class CsvSearchProvider:
         return max(max_bonus - position, 0)
 
     def _complex_score(self, entry: DictionaryEntry, query: str) -> int:
-        weighted_fields = (
-            (10, entry.word),
-            (8, entry.translation),
-            (4, " ".join(entry.examples)),
-            (3, " ".join(entry.notes)),
-            (2, entry.comments),
-        )
-
-        score = sum(weight * count_occurrences(query, value) for weight, value in weighted_fields)
-        if score == 0:
+        query_tokens = tokenize(query)
+        if not query_tokens:
             return 0
 
-        if normalize_query(entry.title) == query:
-            score += 100
-        elif query in normalize_query(entry.word):
-            score += 30
+        normalized_title = normalize_query(entry.title)
+        word_candidates = comma_values(entry.word)
+        title_tokens = tokenize(entry.title)
+        translation_tokens = tokenize(entry.translation)
+        example_tokens = tokenize(" ".join(entry.examples))
+        note_tokens = tokenize(" ".join(entry.notes))
+        comment_tokens = tokenize(entry.comments)
+
+        score = 0
+        if normalized_title == query:
+            score += 260
+        elif normalized_title.startswith(query):
+            score += 180
+
+        if query in word_candidates:
+            score += 220
+        else:
+            score += self._prefix_bonus(word_candidates, query, 160)
+            if any(query in candidate for candidate in word_candidates):
+                score += 50
+
+        weighted_tokens = (
+            (title_tokens, 120, 70, 18),
+            (translation_tokens, 80, 45, 12),
+            (example_tokens, 40, 20, 4),
+            (note_tokens, 25, 12, 3),
+            (comment_tokens, 20, 8, 2),
+        )
+        for tokens, sequence_weight, coverage_weight, token_weight in weighted_tokens:
+            sequence_matches = self._token_sequence_matches(tokens, query_tokens)
+            if sequence_matches > 0:
+                score += sequence_weight * sequence_matches
+
+            if self._has_token_coverage(tokens, query_tokens):
+                score += coverage_weight
+
+            score += token_weight * self._matching_token_count(tokens, query_tokens)
+
         return score
+
+    @staticmethod
+    def _prefix_bonus(values: tuple[str, ...], query: str, max_bonus: int) -> int:
+        prefix_offsets = [len(value) - len(query) for value in values if value.startswith(query)]
+        if not prefix_offsets:
+            return 0
+        return max(max_bonus - min(prefix_offsets), 0)
+
+    @staticmethod
+    def _token_sequence_matches(tokens: tuple[str, ...], query_tokens: tuple[str, ...]) -> int:
+        if not tokens or not query_tokens or len(tokens) < len(query_tokens):
+            return 0
+
+        window_size = len(query_tokens)
+        return sum(
+            1
+            for index in range(len(tokens) - window_size + 1)
+            if tokens[index : index + window_size] == query_tokens
+        )
+
+    @staticmethod
+    def _has_token_coverage(tokens: tuple[str, ...], query_tokens: tuple[str, ...]) -> bool:
+        if not tokens or not query_tokens:
+            return False
+        token_pool = set(tokens)
+        return all(token in token_pool for token in query_tokens)
+
+    @staticmethod
+    def _matching_token_count(tokens: tuple[str, ...], query_tokens: tuple[str, ...]) -> int:
+        if not tokens or not query_tokens:
+            return 0
+        query_pool = set(query_tokens)
+        return sum(1 for token in tokens if token in query_pool)
 
 
 class DictionarySearchService:

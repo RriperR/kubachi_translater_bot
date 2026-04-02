@@ -122,3 +122,82 @@ def test_complex_search_finds_example_match() -> None:
     results = service.search("терем", SearchMode.COMPLEX)
 
     assert [entry.title for entry in results] == ["аIа - дом"]
+
+
+def test_complex_search_prefers_word_prefix_over_comment_noise() -> None:
+    """Комплексный режим должен поднимать префикс слова выше шумных совпадений в комментариях."""
+    service = DictionarySearchService(
+        providers=(
+            CsvSearchProvider(
+                InMemoryRepository(
+                    [
+                        DictionaryEntry(
+                            source=DictionarySource.CORE,
+                            word="гьул",
+                            translation="яблоко",
+                        ),
+                        DictionaryEntry(
+                            source=DictionarySource.CORE,
+                            word="сад",
+                            translation="яблоко",
+                            comments="гьу гьу гьу",
+                        ),
+                    ]
+                )
+            ),
+        )
+    )
+
+    results = service.search("гьу", SearchMode.COMPLEX)
+
+    assert [entry.title for entry in results] == ["гьул - яблоко", "сад - яблоко"]
+
+
+def test_complex_search_prefers_phrase_match_over_scattered_tokens() -> None:
+    """Комплексный режим должен выше ранжировать точную фразу, чем разрозненные токены."""
+    service = DictionarySearchService(
+        providers=(
+            CsvSearchProvider(
+                InMemoryRepository(
+                    [
+                        DictionaryEntry(
+                            source=DictionarySource.CORE,
+                            word="аIа",
+                            translation="большой дом",
+                        ),
+                        DictionaryEntry(
+                            source=DictionarySource.CORE,
+                            word="хъулан",
+                            translation="дом",
+                            examples=("большой сад рядом",),
+                        ),
+                    ]
+                )
+            ),
+        )
+    )
+
+    results = service.search("большой дом", SearchMode.COMPLEX)
+
+    assert [entry.title for entry in results] == ["аIа - большой дом", "хъулан - дом"]
+
+
+def test_complex_search_ignores_substring_inside_single_token() -> None:
+    """Комплексный режим не должен считать совпадением подстроку внутри отдельного токена."""
+    service = DictionarySearchService(
+        providers=(
+            CsvSearchProvider(
+                InMemoryRepository(
+                    [
+                        DictionaryEntry(
+                            source=DictionarySource.CORE,
+                            word="аIа",
+                            translation="домик",
+                        )
+                    ]
+                )
+            ),
+        )
+    )
+
+    assert service.search("дом", SearchMode.COMPLEX) == []
