@@ -1,5 +1,5 @@
 .PHONY: install install-lint install-test install-all \
-	lint doclint lint-fix format format-check type-check test test-critical test-with-coverage project-check run import-dictionary index-rag db-upgrade db-downgrade db-current db-revision
+	lint doclint lint-fix format format-check type-check test test-critical test-with-coverage project-check run import-dictionary index-rag benchmark-retrieval db-upgrade db-downgrade db-current db-revision
 
 install:
 	uv sync
@@ -55,6 +55,9 @@ import-dictionary:
 
 index-rag:
 	uv run python src/index_rag.py
+
+benchmark-retrieval:
+	DB_HOST=localhost DB_PORT=5434 uv run python -m benchmarks.retrieval $(ARGS)
 
 db-upgrade:
 	docker compose run --rm --build bot python -m alembic -c alembic.ini upgrade head

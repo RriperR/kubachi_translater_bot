@@ -132,6 +132,24 @@ make index-rag
 - после смены embedding-модели или размерности старые вектора автоматически помечаются как `pending`, и индексацию нужно прогнать заново;
 - в `docker-compose.yml` для кэша Hugging Face уже подключен volume `hf_cache_slovar`, чтобы не скачивать модель при каждом пересоздании контейнера.
 
+## Retrieval Benchmark
+
+Для сравнения `lexical`, `semantic` и `hybrid` режима есть отдельный benchmark-раннер на фиксированном наборе запросов:
+
+```bash
+make benchmark-retrieval
+```
+
+The target runs against the local Postgres container published on `localhost:5434`, so keep `docker compose up -d db bot` running.
+
+Можно передать свои параметры через `ARGS`, например:
+
+```bash
+make benchmark-retrieval ARGS="--top-k 10 --repeat 10 --output benchmarks/results/latest.json"
+```
+
+Набор кейсов лежит в [benchmarks/retrieval_cases.json](benchmarks/retrieval_cases.json). Скрипт выводит summary по quality-метрикам и latency, а при `--output` сохраняет подробный JSON-отчет.
+
 ## Docker
 
 ```bash
