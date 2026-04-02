@@ -15,7 +15,6 @@ src/
   main.py
   import_dictionary.py
   index_rag.py
-  bot_app.py
   config.py
   models.py
   normalization.py
