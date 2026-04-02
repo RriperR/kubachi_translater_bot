@@ -39,6 +39,34 @@ class PostgresRepository:
         finally:
             connection.close()
 
+    def ensure_schema(self) -> None:
+        """Создать таблицы приложения, если база еще пустая."""
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id BIGSERIAL PRIMARY KEY,
+                        username TEXT,
+                        firstname TEXT NOT NULL,
+                        lastname TEXT NOT NULL,
+                        chatid TEXT NOT NULL UNIQUE,
+                        mode TEXT NOT NULL DEFAULT 'lite'
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS actions (
+                        id BIGSERIAL PRIMARY KEY,
+                        action TEXT NOT NULL,
+                        date_time TEXT NOT NULL,
+                        fk_user BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            connection.commit()
+
     def ensure_user(self, user: TelegramUser) -> None:
         """Создать пользователя в базе, если его еще нет.
 

@@ -85,7 +85,8 @@ class DictionaryBotApp:
         self._register_handlers()
 
     async def run(self) -> None:
-        """Запустить polling Telegram-бота."""
+        """Подготовить зависимости и запустить polling Telegram-бота."""
+        await asyncio.to_thread(self._db_repository.ensure_schema)
         await self._dispatcher.start_polling(self._bot)
 
     def _register_handlers(self) -> None:
