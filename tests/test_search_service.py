@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from models import DictionaryEntry, DictionarySource, SearchMode
-from services.search_service import CsvSearchProvider, DictionarySearchService
+from services.search_service import CsvSearchProvider, DictionarySearchService, SearchMatch
 
 
 class InMemoryRepository:
@@ -45,6 +45,43 @@ class CandidateRepository(InMemoryRepository):
         ]
 
 
+class FuzzyFallbackRepository(InMemoryRepository):
+    """Репозиторий, который не находит SQL-кандидатов для опечатки."""
+
+    def search_entries(self, query: str, mode: SearchMode) -> list[DictionaryEntry]:
+        """Вернуть пустой результат для проверки fallback на полный словарь.
+
+        Args:
+            query: Поисковый запрос пользователя.
+            mode: Режим поиска.
+
+        Returns:
+            Пустой список кандидатов.
+        """
+        assert query == "првет"
+        assert mode == SearchMode.COMPLEX
+        return []
+
+
+class StaticSearchProvider:
+    """Поисковый провайдер с заранее заданными результатами."""
+
+    def __init__(self, matches: list[SearchMatch]) -> None:
+        self._matches = matches
+
+    def search(self, query: str, mode: SearchMode) -> list[SearchMatch]:
+        """Вернуть заранее зафиксированные совпадения.
+
+        Args:
+            query: Поисковый запрос пользователя.
+            mode: Режим поиска.
+
+        Returns:
+            Список тестовых совпадений.
+        """
+        return self._matches
+
+
 def test_lite_search_ignores_examples_and_notes() -> None:
     """Простой режим не должен искать по примерам и примечаниям."""
     provider = CsvSearchProvider(
@@ -82,6 +119,25 @@ def test_provider_uses_repository_candidates_when_available() -> None:
     results = provider.search("дом", SearchMode.LITE)
 
     assert [match.entry.title for match in results] == ["аIа - дом"]
+
+
+def test_complex_search_falls_back_to_full_dictionary_for_single_typo() -> None:
+    """Опечатка в одном токене должна вызывать fuzzy fallback вместо пустого SQL-результата."""
+    provider = CsvSearchProvider(
+        FuzzyFallbackRepository(
+            [
+                DictionaryEntry(
+                    source=DictionarySource.CORE,
+                    word="салам",
+                    translation="привет",
+                )
+            ]
+        )
+    )
+
+    results = provider.search("првет", SearchMode.COMPLEX)
+
+    assert [match.entry.title for match in results] == ["салам - привет"]
 
 
 def test_lite_search_prefers_word_match_over_translation() -> None:
@@ -244,3 +300,35 @@ def test_complex_search_ignores_substring_inside_single_token() -> None:
     )
 
     assert service.search("дом", SearchMode.COMPLEX) == []
+
+
+def test_complex_search_drops_semantic_noise_when_fuzzy_match_exists() -> None:
+    """Сильный fuzzy-матч должен отсекать низкосигнальный semantic-мусор по опечатке."""
+    fuzzy_provider = CsvSearchProvider(
+        InMemoryRepository(
+            [
+                DictionaryEntry(
+                    source=DictionarySource.CORE,
+                    word="салам",
+                    translation="привет",
+                )
+            ]
+        )
+    )
+    semantic_provider = StaticSearchProvider(
+        [
+            SearchMatch(
+                entry=DictionaryEntry(
+                    source=DictionarySource.CORE,
+                    word="узданзиб",
+                    translation="вольный",
+                ),
+                score=72,
+            )
+        ]
+    )
+    service = DictionarySearchService(providers=(fuzzy_provider, semantic_provider))
+
+    results = service.search("првет", SearchMode.COMPLEX)
+
+    assert [entry.title for entry in results] == ["салам - привет"]

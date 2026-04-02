@@ -87,7 +87,10 @@ class CsvSearchProvider:
 
     def _load_entries(self, query: str, mode: SearchMode) -> list[DictionaryEntry]:
         if isinstance(self._repository, CandidateEntryRepository):
-            return self._repository.search_entries(query, mode)
+            entries = self._repository.search_entries(query, mode)
+            if entries or not self._supports_fuzzy_fallback(normalize_query(query)):
+                return entries
+            return self._repository.list_entries()
         return self._repository.list_entries()
 
     def _match_score(self, entry: DictionaryEntry, query: str, mode: SearchMode) -> int:
@@ -109,6 +112,9 @@ class CsvSearchProvider:
             score = max(score, 350 + self._position_bonus(translation_tokens, query, 25))
         if entry.source == DictionarySource.CORE and query in comment_tokens:
             score = max(score, 120 + self._position_bonus(comment_tokens, query, 10))
+        if score == 0 and self._supports_fuzzy_fallback(query):
+            score = max(score, self._fuzzy_score(word_candidates, query, 430, 24))
+            score = max(score, self._fuzzy_score(translation_tokens, query, 300, 18))
         return score
 
     @staticmethod
@@ -144,6 +150,11 @@ class CsvSearchProvider:
             score += self._prefix_bonus(word_candidates, query, 160)
             if any(query in candidate for candidate in word_candidates):
                 score += 50
+            if self._supports_fuzzy_fallback(query):
+                score += self._fuzzy_score(word_candidates, query, 320, 18)
+
+        if self._supports_fuzzy_fallback(query):
+            score += self._fuzzy_score(translation_tokens, query, 270, 14)
 
         weighted_tokens = (
             (title_tokens, 120, 70, 18),
@@ -197,6 +208,62 @@ class CsvSearchProvider:
         query_pool = set(query_tokens)
         return sum(1 for token in tokens if token in query_pool)
 
+    @staticmethod
+    def _supports_fuzzy_fallback(query: str) -> bool:
+        query_tokens = tokenize(query)
+        return len(query_tokens) == 1 and len(query_tokens[0]) >= 4
+
+    @classmethod
+    def _fuzzy_score(
+        cls,
+        candidates: tuple[str, ...],
+        query: str,
+        base_score: int,
+        max_bonus: int,
+    ) -> int:
+        if not cls._supports_fuzzy_fallback(query):
+            return 0
+
+        max_distance = 1 if len(query) <= 5 else 2
+        best_score = 0
+        for candidate in candidates:
+            distance = cls._bounded_edit_distance(query, candidate, max_distance)
+            if distance is None:
+                continue
+            candidate_score = base_score + max(max_bonus - distance * 10, 0)
+            if candidate_score > best_score:
+                best_score = candidate_score
+        return best_score
+
+    @staticmethod
+    def _bounded_edit_distance(left: str, right: str, max_distance: int) -> int | None:
+        if left == right:
+            return 0
+        if abs(len(left) - len(right)) > max_distance:
+            return None
+
+        previous_row = list(range(len(right) + 1))
+        for left_index, left_char in enumerate(left, start=1):
+            current_row = [left_index]
+            row_min = current_row[0]
+            for right_index, right_char in enumerate(right, start=1):
+                substitution_cost = 0 if left_char == right_char else 1
+                current_value = min(
+                    previous_row[right_index] + 1,
+                    current_row[right_index - 1] + 1,
+                    previous_row[right_index - 1] + substitution_cost,
+                )
+                current_row.append(current_value)
+                row_min = min(row_min, current_value)
+            if row_min > max_distance:
+                return None
+            previous_row = current_row
+
+        distance = previous_row[-1]
+        if distance > max_distance:
+            return None
+        return distance
+
 
 class DictionarySearchService:
     """Оркестрация поиска по нескольким провайдерам.
@@ -233,8 +300,14 @@ class DictionarySearchService:
             if previous is None or match.score > previous.score:
                 unique_matches[key] = match
 
+        filtered_matches = self._filter_semantic_noise(
+            tuple(unique_matches.values()),
+            query,
+            mode,
+        )
+
         sorted_matches = sorted(
-            unique_matches.values(),
+            filtered_matches,
             key=lambda item: (
                 -item.score,
                 0 if item.entry.source == DictionarySource.CORE else 1,
@@ -242,6 +315,23 @@ class DictionarySearchService:
             ),
         )
         return [match.entry for match in sorted_matches]
+
+    @staticmethod
+    def _filter_semantic_noise(
+        matches: Sequence[SearchMatch],
+        query: str,
+        mode: SearchMode,
+    ) -> Sequence[SearchMatch]:
+        if mode != SearchMode.COMPLEX:
+            return matches
+        if not CsvSearchProvider._supports_fuzzy_fallback(normalize_query(query)):
+            return matches
+
+        best_score = max((match.score for match in matches), default=0)
+        if best_score < 260:
+            return matches
+
+        return [match for match in matches if match.score >= 180]
 
 
 def format_entry(entry: DictionaryEntry) -> str:
