@@ -11,7 +11,7 @@ from psycopg2.extras import RealDictCursor
 
 from config import DatabaseConfig
 from models import DictionaryEntry, DictionarySource, SearchMode, TelegramUser, UserSubmittedEntry
-from normalization import compact_lines, normalize_query, split_values
+from normalization import compact_lines, normalize_query, split_values, tokenize
 
 _CANDIDATE_LIMIT = 250
 
@@ -202,7 +202,7 @@ class PostgresDictionaryRepository:
                         list(compact_lines(split_values(entry.phrases_raw, "%"))),
                         list(compact_lines(split_values(entry.supporting_raw, "\\"))),
                         normalize_query(entry.word),
-                        normalize_query(entry.translation),
+                        self._normalize_token_text(entry.translation),
                         self._build_search_text(
                             entry.word,
                             entry.translation,
@@ -238,7 +238,7 @@ class PostgresDictionaryRepository:
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    """
+                    r"""
                     UPDATE dictionary_entries
                     SET comments = CASE
                             WHEN btrim(comments) = '' THEN %s
@@ -246,15 +246,20 @@ class PostgresDictionaryRepository:
                         END,
                         normalized_comments = btrim(
                             regexp_replace(
-                                lower(
-                                    translate(
-                                        CASE
-                                            WHEN btrim(comments) = '' THEN %s
-                                            ELSE comments || E'\n' || %s
-                                        END,
-                                        '1!l|I',
-                                        'iiiii'
-                                    )
+                                regexp_replace(
+                                    lower(
+                                        translate(
+                                            CASE
+                                                WHEN btrim(comments) = '' THEN %s
+                                                ELSE comments || E'\n' || %s
+                                            END,
+                                            '1!l|I',
+                                            'iiiii'
+                                        )
+                                    ),
+                                    '[(){}\[\],.;:!?\"''«»]+',
+                                    ' ',
+                                    'g'
                                 ),
                                 '\s+',
                                 ' ',
@@ -263,22 +268,27 @@ class PostgresDictionaryRepository:
                         ),
                         normalized_search_text = btrim(
                             regexp_replace(
-                                lower(
-                                    translate(
-                                        concat_ws(
-                                            ' ',
-                                            word,
-                                            translation,
-                                            array_to_string(examples, ' '),
-                                            array_to_string(notes, ' '),
-                                            CASE
-                                                WHEN btrim(comments) = '' THEN %s
-                                                ELSE comments || E'\n' || %s
-                                            END
-                                        ),
-                                        '1!l|I',
-                                        'iiiii'
-                                    )
+                                regexp_replace(
+                                    lower(
+                                        translate(
+                                            concat_ws(
+                                                ' ',
+                                                word,
+                                                translation,
+                                                array_to_string(examples, ' '),
+                                                array_to_string(notes, ' '),
+                                                CASE
+                                                    WHEN btrim(comments) = '' THEN %s
+                                                    ELSE comments || E'\n' || %s
+                                                END
+                                            ),
+                                            '1!l|I',
+                                            'iiiii'
+                                        )
+                                    ),
+                                    '[(){}\[\],.;:!?\"''«»]+',
+                                    ' ',
+                                    'g'
                                 ),
                                 '\s+',
                                 ' ',
@@ -306,7 +316,7 @@ class PostgresDictionaryRepository:
     def _build_search_query(self, query: str, mode: SearchMode) -> tuple[str, tuple[object, ...]]:
         if mode == SearchMode.LITE:
             return (
-                """
+                r"""
                 SELECT
                     word,
                     translation,
@@ -383,8 +393,8 @@ class PostgresDictionaryRepository:
             list(entry.notes),
             entry.comments,
             normalize_query(entry.word),
-            normalize_query(entry.translation),
-            normalize_query(entry.comments),
+            self._normalize_token_text(entry.translation),
+            self._normalize_token_text(entry.comments),
             self._build_search_text(
                 entry.word,
                 entry.translation,
@@ -406,8 +416,18 @@ class PostgresDictionaryRepository:
         notes: Iterable[str],
         comments: str,
     ) -> str:
-        parts = [word, translation, *examples, *notes, comments]
-        return normalize_query(" ".join(part for part in parts if part))
+        parts = [
+            normalize_query(word),
+            PostgresDictionaryRepository._normalize_token_text(translation),
+            *(PostgresDictionaryRepository._normalize_token_text(example) for example in examples),
+            *(PostgresDictionaryRepository._normalize_token_text(note) for note in notes),
+            PostgresDictionaryRepository._normalize_token_text(comments),
+        ]
+        return " ".join(part for part in parts if part)
+
+    @staticmethod
+    def _normalize_token_text(text: str) -> str:
+        return " ".join(tokenize(text))
 
     def _row_to_entry(self, row: dict[str, Any]) -> DictionaryEntry:
         return DictionaryEntry(

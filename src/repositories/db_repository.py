@@ -124,7 +124,12 @@ class PostgresRepository:
                         ),
                         normalized_translation = btrim(
                             regexp_replace(
-                                lower(translate(translation, '1!l|I', 'iiiii')),
+                                regexp_replace(
+                                    lower(translate(translation, '1!l|I', 'iiiii')),
+                                    '[(){}\[\],.;:!?\"''«»]+',
+                                    ' ',
+                                    'g'
+                                ),
                                 '\s+',
                                 ' ',
                                 'g'
@@ -132,7 +137,12 @@ class PostgresRepository:
                         ),
                         normalized_comments = btrim(
                             regexp_replace(
-                                lower(translate(comments, '1!l|I', 'iiiii')),
+                                regexp_replace(
+                                    lower(translate(comments, '1!l|I', 'iiiii')),
+                                    '[(){}\[\],.;:!?\"''«»]+',
+                                    ' ',
+                                    'g'
+                                ),
                                 '\s+',
                                 ' ',
                                 'g'
@@ -140,19 +150,24 @@ class PostgresRepository:
                         ),
                         normalized_search_text = btrim(
                             regexp_replace(
-                                lower(
-                                    translate(
-                                        concat_ws(
-                                            ' ',
-                                            word,
-                                            translation,
-                                            array_to_string(examples, ' '),
-                                            array_to_string(notes, ' '),
-                                            comments
-                                        ),
-                                        '1!l|I',
-                                        'iiiii'
-                                    )
+                                regexp_replace(
+                                    lower(
+                                        translate(
+                                            concat_ws(
+                                                ' ',
+                                                word,
+                                                translation,
+                                                array_to_string(examples, ' '),
+                                                array_to_string(notes, ' '),
+                                                comments
+                                            ),
+                                            '1!l|I',
+                                            'iiiii'
+                                        )
+                                    ),
+                                    '[(){}\[\],.;:!?\"''«»]+',
+                                    ' ',
+                                    'g'
                                 ),
                                 '\s+',
                                 ' ',
@@ -163,6 +178,9 @@ class PostgresRepository:
                        OR normalized_translation = ''
                        OR normalized_search_text = ''
                        OR (comments <> '' AND normalized_comments = '')
+                       OR normalized_translation ~ '[(){}\[\],.;:!?\"''«»]'
+                       OR normalized_comments ~ '[(){}\[\],.;:!?\"''«»]'
+                       OR normalized_search_text ~ '[(){}\[\],.;:!?\"''«»]'
                     """
                 )
                 cursor.execute(
