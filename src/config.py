@@ -1,23 +1,20 @@
-"""Конфигурация приложения и загрузка переменных окружения."""
+"""Конфигурация приложения и загрузка переменных окружения через pydantic."""
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent
 
-load_dotenv(PROJECT_ROOT / ".env")
-load_dotenv()
 
-
-@dataclass(frozen=True)
-class DatabaseConfig:
+class DatabaseConfig(BaseModel):
     """Параметры подключения к PostgreSQL."""
+
+    model_config = ConfigDict(frozen=True)
 
     host: str
     port: int
@@ -26,29 +23,40 @@ class DatabaseConfig:
     database: str
 
 
-@dataclass(frozen=True)
-class AppConfig:
+class AppConfig(BaseSettings):
     """Корневая конфигурация приложения."""
 
-    bot_token: str
-    admin_chat_id: int | None
-    database: DatabaseConfig
-    main_dictionary_path: Path
-    user_dictionary_path: Path
+    model_config = SettingsConfigDict(
+        env_file=(PROJECT_ROOT / ".env", ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        frozen=True,
+    )
 
+    bot_token: str = Field(validation_alias="BOT_TOKEN")
+    admin_chat_id: int | None = Field(default=None, validation_alias="ADMIN_CHAT_ID")
+    db_host: str = Field(validation_alias="DB_HOST", exclude=True)
+    db_port: int = Field(validation_alias="DB_PORT", exclude=True)
+    db_user: str = Field(validation_alias="DB_USER", exclude=True)
+    db_password: str = Field(validation_alias="DB_PASSWORD", exclude=True, repr=False)
+    db_name: str = Field(validation_alias="DB_NAME", exclude=True)
+    main_dictionary_path: Path = BASE_DIR / "Slovar_14_08.csv"
+    user_dictionary_path: Path = BASE_DIR / "users_translates.csv"
 
-def _require_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
+    @property
+    def database(self) -> DatabaseConfig:
+        """Собрать параметры подключения к PostgreSQL.
 
-
-def _optional_int(name: str) -> int | None:
-    value = os.getenv(name)
-    if value is None or value == "":
-        return None
-    return int(value)
+        Returns:
+            Объект с параметрами подключения к базе данных.
+        """
+        return DatabaseConfig(
+            host=self.db_host,
+            port=self.db_port,
+            user=self.db_user,
+            password=self.db_password,
+            database=self.db_name,
+        )
 
 
 def load_config() -> AppConfig:
@@ -57,16 +65,4 @@ def load_config() -> AppConfig:
     Returns:
         Заполненный объект конфигурации приложения.
     """
-    return AppConfig(
-        bot_token=_require_env("BOT_TOKEN"),
-        admin_chat_id=_optional_int("ADMIN_CHAT_ID"),
-        database=DatabaseConfig(
-            host=_require_env("DB_HOST"),
-            port=int(_require_env("DB_PORT")),
-            user=_require_env("DB_USER"),
-            password=_require_env("DB_PASSWORD"),
-            database=_require_env("DB_NAME"),
-        ),
-        main_dictionary_path=BASE_DIR / "Slovar_14_08.csv",
-        user_dictionary_path=BASE_DIR / "users_translates.csv",
-    )
+    return AppConfig()

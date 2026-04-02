@@ -51,7 +51,7 @@ pip install -r requirements.txt
 
 ## Переменные окружения
 
-Создай `.env` со значениями:
+Создай `.env` со значениями. Его загрузит `pydantic-settings`:
 
 ```env
 BOT_TOKEN=...
