@@ -18,6 +18,7 @@ venv/
 # IDEs and editors
 .idea/
 .vscode/
+ruff copy.toml
 
 # OS files
 .DS_Store
