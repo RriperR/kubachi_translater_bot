@@ -1,5 +1,5 @@
 .PHONY: install install-lint install-test install-all \
-	lint doclint lint-fix format format-check type-check test test-critical test-with-coverage project-check run
+	lint doclint lint-fix format format-check type-check test test-critical test-with-coverage project-check run import-dictionary
 
 install:
 	uv sync
@@ -49,3 +49,6 @@ project-check:
 
 run:
 	uv run python src/main.py
+
+import-dictionary:
+	uv run python src/import_dictionary.py

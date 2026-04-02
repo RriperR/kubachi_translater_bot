@@ -22,7 +22,6 @@ import texts
 from config import AppConfig, load_config
 from models import DictionarySource, SearchMode, TelegramUser, UserSubmittedEntry
 from normalization import normalize_kubachi_word
-from repositories.csv_repository import MAIN_SCHEMA, USER_SCHEMA, CsvDictionaryRepository
 from repositories.db_repository import PostgresRepository
 from repositories.postgres_dictionary_repository import PostgresDictionaryRepository
 from services.export_service import DatabaseExportService
@@ -65,16 +64,6 @@ class DictionaryBotApp:
 
         self._session_store = SessionStore()
         self._db_repository = PostgresRepository(config.database)
-        self._main_csv_repository = CsvDictionaryRepository(
-            config.main_dictionary_path,
-            DictionarySource.CORE,
-            MAIN_SCHEMA,
-        )
-        self._user_csv_repository = CsvDictionaryRepository(
-            config.user_dictionary_path,
-            DictionarySource.USER,
-            USER_SCHEMA,
-        )
         self._main_repository = PostgresDictionaryRepository(config.database, DictionarySource.CORE)
         self._user_repository = PostgresDictionaryRepository(config.database, DictionarySource.USER)
         self._search_service = DictionarySearchService(
@@ -90,7 +79,6 @@ class DictionaryBotApp:
     async def run(self) -> None:
         """Подготовить зависимости и запустить polling Telegram-бота."""
         await asyncio.to_thread(self._db_repository.ensure_schema)
-        await asyncio.to_thread(self._bootstrap_dictionary_storage)
         await self._dispatcher.start_polling(self._bot)
 
     def _register_handlers(self) -> None:
@@ -418,12 +406,6 @@ class DictionaryBotApp:
             await self._bot.send_message(self._config.admin_chat_id, text)
         except Exception:  # pragma: no cover
             logger.exception("Failed to notify admin")
-
-    def _bootstrap_dictionary_storage(self) -> None:
-        if not self._main_repository.has_entries():
-            self._main_repository.import_entries(self._main_csv_repository.list_entries())
-        if not self._user_repository.has_entries():
-            self._user_repository.import_entries(self._user_csv_repository.list_entries())
 
     def _extract_actor(self, message: Message) -> TelegramUser:
         from_user = message.from_user
