@@ -26,8 +26,8 @@ from normalization import normalize_kubachi_word
 from repositories.db_repository import PostgresRepository
 from repositories.postgres_dictionary_repository import PostgresDictionaryRepository
 from services.export_service import DatabaseExportService
-from services.rag_service import PgvectorSearchProvider, build_embedding_provider
-from services.search_service import CsvSearchProvider, DictionarySearchService, format_entry
+from services.rag import PgvectorSearchProvider, build_embedding_provider
+from services.search import DictionarySearchService, LexicalSearchProvider, format_entry
 from services.session_store import SessionStore
 
 logger = logging.getLogger(__name__)
@@ -90,8 +90,8 @@ class DictionaryBotApp:
             )
         self._search_service = DictionarySearchService(
             providers=(
-                CsvSearchProvider(self._main_repository),
-                CsvSearchProvider(self._user_repository),
+                LexicalSearchProvider(self._main_repository),
+                LexicalSearchProvider(self._user_repository),
                 *semantic_providers,
             )
         )

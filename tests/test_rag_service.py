@@ -11,7 +11,7 @@ from models import (
     SearchMode,
     SemanticSearchCandidate,
 )
-from services.rag_service import (
+from services.rag import (
     DictionaryRagIndexer,
     EmbeddingVector,
     HashEmbeddingProvider,

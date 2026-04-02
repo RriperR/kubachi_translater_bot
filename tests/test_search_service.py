@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from models import DictionaryEntry, DictionarySource, SearchMode
-from services.search_service import CsvSearchProvider, DictionarySearchService, SearchMatch
+from models import DictionaryEntry, DictionarySource, SearchMatch, SearchMode
+from services.search import DictionarySearchService, LexicalSearchProvider
 
 
 class InMemoryRepository:
@@ -84,7 +84,7 @@ class StaticSearchProvider:
 
 def test_lite_search_ignores_examples_and_notes() -> None:
     """Простой режим не должен искать по примерам и примечаниям."""
-    provider = CsvSearchProvider(
+    provider = LexicalSearchProvider(
         InMemoryRepository(
             [
                 DictionaryEntry(
@@ -104,7 +104,7 @@ def test_lite_search_ignores_examples_and_notes() -> None:
 
 def test_provider_uses_repository_candidates_when_available() -> None:
     """Провайдер должен брать кандидатов из репозитория, если тот поддерживает SQL-поиск."""
-    provider = CsvSearchProvider(
+    provider = LexicalSearchProvider(
         CandidateRepository(
             [
                 DictionaryEntry(
@@ -123,7 +123,7 @@ def test_provider_uses_repository_candidates_when_available() -> None:
 
 def test_complex_search_falls_back_to_full_dictionary_for_single_typo() -> None:
     """Опечатка в одном токене должна вызывать fuzzy fallback вместо пустого SQL-результата."""
-    provider = CsvSearchProvider(
+    provider = LexicalSearchProvider(
         FuzzyFallbackRepository(
             [
                 DictionaryEntry(
@@ -144,7 +144,7 @@ def test_lite_search_prefers_word_match_over_translation() -> None:
     """В простом режиме совпадение по слову должно быть выше совпадения по переводу."""
     service = DictionarySearchService(
         providers=(
-            CsvSearchProvider(
+            LexicalSearchProvider(
                 InMemoryRepository(
                     [
                         DictionaryEntry(
@@ -172,7 +172,7 @@ def test_lite_search_uses_position_bonus_for_translation_tokens() -> None:
     """В простом режиме более ранний токен перевода должен ранжироваться выше."""
     service = DictionarySearchService(
         providers=(
-            CsvSearchProvider(
+            LexicalSearchProvider(
                 InMemoryRepository(
                     [
                         DictionaryEntry(
@@ -203,7 +203,7 @@ def test_complex_search_finds_example_match() -> None:
     """Комплексный режим должен искать по примерам."""
     service = DictionarySearchService(
         providers=(
-            CsvSearchProvider(
+            LexicalSearchProvider(
                 InMemoryRepository(
                     [
                         DictionaryEntry(
@@ -227,7 +227,7 @@ def test_complex_search_prefers_word_prefix_over_comment_noise() -> None:
     """Комплексный режим должен поднимать префикс слова выше шумных совпадений в комментариях."""
     service = DictionarySearchService(
         providers=(
-            CsvSearchProvider(
+            LexicalSearchProvider(
                 InMemoryRepository(
                     [
                         DictionaryEntry(
@@ -256,7 +256,7 @@ def test_complex_search_prefers_phrase_match_over_scattered_tokens() -> None:
     """Комплексный режим должен выше ранжировать точную фразу, чем разрозненные токены."""
     service = DictionarySearchService(
         providers=(
-            CsvSearchProvider(
+            LexicalSearchProvider(
                 InMemoryRepository(
                     [
                         DictionaryEntry(
@@ -285,7 +285,7 @@ def test_complex_search_ignores_substring_inside_single_token() -> None:
     """Комплексный режим не должен считать совпадением подстроку внутри отдельного токена."""
     service = DictionarySearchService(
         providers=(
-            CsvSearchProvider(
+            LexicalSearchProvider(
                 InMemoryRepository(
                     [
                         DictionaryEntry(
@@ -304,7 +304,7 @@ def test_complex_search_ignores_substring_inside_single_token() -> None:
 
 def test_complex_search_drops_semantic_noise_when_fuzzy_match_exists() -> None:
     """Сильный fuzzy-матч должен отсекать низкосигнальный semantic-мусор по опечатке."""
-    fuzzy_provider = CsvSearchProvider(
+    fuzzy_provider = LexicalSearchProvider(
         InMemoryRepository(
             [
                 DictionaryEntry(

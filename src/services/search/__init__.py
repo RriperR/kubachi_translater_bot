@@ -1,24 +1,26 @@
-"""Совместимый интерфейс для модуля поиска."""
+"""Пакет поисковых провайдеров и форматирования."""
 
 from __future__ import annotations
 
 from models import DictionaryEntry, DictionarySource, SearchMatch, SearchMode
-from services.search import (
+
+from .formatting import format_entry
+from .lexical import (
     CandidateEntryRepository,
-    CsvSearchProvider,
-    DictionarySearchService,
     EntryRepository,
     LexicalSearchProvider,
     SearchProvider,
-    format_entry,
 )
+from .orchestrator import DictionarySearchService
+
+CsvSearchProvider = LexicalSearchProvider
 
 __all__ = [
+    "DictionaryEntry",
+    "DictionarySource",
     "CandidateEntryRepository",
     "CsvSearchProvider",
-    "DictionaryEntry",
     "DictionarySearchService",
-    "DictionarySource",
     "EntryRepository",
     "LexicalSearchProvider",
     "SearchMatch",
