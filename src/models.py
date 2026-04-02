@@ -88,6 +88,30 @@ class SearchMatch:
     score: int
 
 
+@dataclass(frozen=True)
+class RagChunkRecord:
+    """Чанк словаря, ожидающий индексации эмбеддингом."""
+
+    chunk_id: int
+    entry_id: int
+    source: DictionarySource
+    chunk_type: str
+    chunk_text: str
+    normalized_chunk_text: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class SemanticSearchCandidate:
+    """Кандидат, найденный семантическим поиском по chunk-эмбеддингам."""
+
+    entry: DictionaryEntry
+    chunk_id: int
+    chunk_type: str
+    chunk_text: str
+    distance: float
+
+
 @dataclass
 class ChatSession:
     """Сессионные данные чата для пагинации результатов."""

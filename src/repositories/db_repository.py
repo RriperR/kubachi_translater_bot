@@ -43,6 +43,7 @@ class PostgresRepository:
         """Создать таблицы приложения, если база еще пустая."""
         with self._connect() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
                 cursor.execute(
                     """
                     CREATE TABLE IF NOT EXISTS users (
@@ -360,10 +361,24 @@ class PostgresRepository:
                         embedding_status TEXT NOT NULL DEFAULT 'pending' CHECK (
                             embedding_status IN ('pending', 'ready', 'error')
                         ),
+                        embedding vector(256),
                         content_hash TEXT NOT NULL DEFAULT '',
                         last_indexed_at TIMESTAMPTZ,
                         last_error TEXT NOT NULL DEFAULT ''
                     )
+                    """
+                )
+                cursor.execute(
+                    """
+                    ALTER TABLE dictionary_chunk_embeddings
+                    ADD COLUMN IF NOT EXISTS embedding vector(256)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_chunk_embeddings_hnsw
+                    ON dictionary_chunk_embeddings
+                    USING hnsw (embedding vector_cosine_ops)
                     """
                 )
             connection.commit()

@@ -24,3 +24,7 @@ def test_app_config_loads_from_env(monkeypatch) -> None:
     assert config.database.user == "bot"
     assert config.database.password.get_secret_value() == "secret"
     assert config.database.database == "kubachi_db"
+    assert config.rag_enabled is True
+    assert config.rag_top_k == 5
+    assert config.rag_max_distance == 0.65
+    assert config.rag_index_batch_size == 1024

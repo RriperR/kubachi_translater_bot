@@ -1,5 +1,5 @@
 .PHONY: install install-lint install-test install-all \
-	lint doclint lint-fix format format-check type-check test test-critical test-with-coverage project-check run import-dictionary
+	lint doclint lint-fix format format-check type-check test test-critical test-with-coverage project-check run import-dictionary index-rag
 
 install:
 	uv sync
@@ -52,3 +52,6 @@ run:
 
 import-dictionary:
 	uv run python src/import_dictionary.py
+
+index-rag:
+	uv run python src/index_rag.py

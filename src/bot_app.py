@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
@@ -25,6 +26,7 @@ from normalization import normalize_kubachi_word
 from repositories.db_repository import PostgresRepository
 from repositories.postgres_dictionary_repository import PostgresDictionaryRepository
 from services.export_service import DatabaseExportService
+from services.rag_service import HashEmbeddingProvider, PgvectorSearchProvider
 from services.search_service import CsvSearchProvider, DictionarySearchService, format_entry
 from services.session_store import SessionStore
 
@@ -66,10 +68,28 @@ class DictionaryBotApp:
         self._db_repository = PostgresRepository(config.database)
         self._main_repository = PostgresDictionaryRepository(config.database, DictionarySource.CORE)
         self._user_repository = PostgresDictionaryRepository(config.database, DictionarySource.USER)
+        self._embedding_provider = HashEmbeddingProvider()
+        semantic_providers: tuple[Any, ...] = ()
+        if config.rag_enabled:
+            semantic_providers = (
+                PgvectorSearchProvider(
+                    repository=self._main_repository,
+                    embedding_provider=self._embedding_provider,
+                    top_k=config.rag_top_k,
+                    max_distance=config.rag_max_distance,
+                ),
+                PgvectorSearchProvider(
+                    repository=self._user_repository,
+                    embedding_provider=self._embedding_provider,
+                    top_k=config.rag_top_k,
+                    max_distance=config.rag_max_distance,
+                ),
+            )
         self._search_service = DictionarySearchService(
             providers=(
                 CsvSearchProvider(self._main_repository),
                 CsvSearchProvider(self._user_repository),
+                *semantic_providers,
             )
         )
         self._export_service = DatabaseExportService(self._db_repository)

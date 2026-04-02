@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, execute_values
 
 from config import DatabaseConfig
-from models import DictionaryEntry, DictionarySource, SearchMode, TelegramUser, UserSubmittedEntry
+from models import (
+    DictionaryEntry,
+    DictionarySource,
+    RagChunkRecord,
+    SearchMode,
+    SemanticSearchCandidate,
+    TelegramUser,
+    UserSubmittedEntry,
+)
 from normalization import compact_lines, normalize_query, split_values, tokenize
 
 _CANDIDATE_LIMIT = 250
@@ -29,6 +37,15 @@ class PostgresDictionaryRepository:
         """
         self._config = config
         self._source = source
+
+    @property
+    def source(self) -> DictionarySource:
+        """Вернуть словарный источник, закрепленный за репозиторием.
+
+        Returns:
+            Источник статей, с которым работает этот экземпляр репозитория.
+        """
+        return self._source
 
     @contextmanager
     def _connect(self) -> Iterator[Any]:
@@ -145,6 +162,269 @@ class PostgresDictionaryRepository:
             connection.commit()
 
         return total_chunks
+
+    def fetch_pending_rag_chunks(self, limit: int) -> list[RagChunkRecord]:
+        """Вернуть чанки, для которых нужно посчитать или обновить эмбеддинги.
+
+        Args:
+            limit: Максимальное количество чанков за один проход.
+
+        Returns:
+            Список чанков выбранного источника, ожидающих индексации.
+        """
+        with (
+            self._connect() as connection,
+            connection.cursor(cursor_factory=RealDictCursor) as cursor,
+        ):
+            cursor.execute(
+                """
+                SELECT
+                    chunks.id AS chunk_id,
+                    chunks.entry_id,
+                    chunks.source,
+                    chunks.chunk_type,
+                    chunks.chunk_text,
+                    chunks.normalized_chunk_text,
+                    embeddings.content_hash
+                FROM dictionary_entry_chunks AS chunks
+                JOIN dictionary_chunk_embeddings AS embeddings
+                    ON embeddings.chunk_id = chunks.id
+                WHERE chunks.source = %s
+                  AND (
+                    embeddings.embedding_status <> 'ready'
+                    OR embeddings.embedding IS NULL
+                  )
+                ORDER BY chunks.id
+                LIMIT %s
+                """,
+                (self._source.value, limit),
+            )
+            rows = cursor.fetchall()
+
+        return [
+            RagChunkRecord(
+                chunk_id=int(row["chunk_id"]),
+                entry_id=int(row["entry_id"]),
+                source=DictionarySource(str(row["source"]).strip()),
+                chunk_type=str(row["chunk_type"]).strip(),
+                chunk_text=str(row["chunk_text"]),
+                normalized_chunk_text=str(row["normalized_chunk_text"]),
+                content_hash=str(row["content_hash"] or ""),
+            )
+            for row in rows
+        ]
+
+    def count_pending_rag_chunks(self) -> int:
+        """Подсчитать число чанков, которые еще не имеют актуального embedding.
+
+        Returns:
+            Количество pending/error-чанков текущего словарного источника.
+        """
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM dictionary_entry_chunks AS chunks
+                JOIN dictionary_chunk_embeddings AS embeddings
+                    ON embeddings.chunk_id = chunks.id
+                WHERE chunks.source = %s
+                  AND (
+                    embeddings.embedding_status <> 'ready'
+                    OR embeddings.embedding IS NULL
+                  )
+                """,
+                (self._source.value,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return 0
+            return int(row[0])
+
+    def store_chunk_embeddings(
+        self,
+        items: Sequence[tuple[int, str]],
+        provider: str,
+        model: str,
+        version: str,
+        dimensions: int,
+    ) -> int:
+        """Сохранить пакет рассчитанных embeddings за одну транзакцию.
+
+        Args:
+            items: Пары `(chunk_id, embedding_literal)` для обновления.
+            provider: Имя провайдера embeddings.
+            model: Имя embedding-модели.
+            version: Версия логики embeddings.
+            dimensions: Размерность вектора.
+
+        Returns:
+            Число чанков, обновленных в текущем пакете.
+        """
+        if not items:
+            return 0
+
+        payload = [
+            (chunk_id, embedding, provider, model, version, dimensions)
+            for chunk_id, embedding in items
+        ]
+        with self._connect() as connection, connection.cursor() as cursor:
+            execute_values(
+                cursor,
+                """
+                UPDATE dictionary_chunk_embeddings AS target
+                SET embedding = source.embedding::vector,
+                    embedding_provider = source.provider,
+                    embedding_model = source.model,
+                    embedding_version = source.version,
+                    vector_dimensions = source.dimensions,
+                    embedding_status = 'ready',
+                    last_indexed_at = NOW(),
+                    last_error = ''
+                FROM (
+                    VALUES %s
+                ) AS source(
+                    chunk_id,
+                    embedding,
+                    provider,
+                    model,
+                    version,
+                    dimensions
+                )
+                WHERE target.chunk_id = source.chunk_id
+                """,
+                payload,
+            )
+            updated = int(cursor.rowcount)
+            connection.commit()
+        return updated
+
+    def store_chunk_embedding(
+        self,
+        chunk_id: int,
+        embedding: str,
+        provider: str,
+        model: str,
+        version: str,
+        dimensions: int,
+    ) -> None:
+        """Сохранить рассчитанный эмбеддинг чанка.
+
+        Args:
+            chunk_id: Идентификатор чанка.
+            embedding: Вектор в формате литерала pgvector.
+            provider: Имя провайдера эмбеддингов.
+            model: Имя модели эмбеддингов.
+            version: Версия логики эмбеддингов.
+            dimensions: Размерность вектора.
+        """
+        self.store_chunk_embeddings(
+            items=((chunk_id, embedding),),
+            provider=provider,
+            model=model,
+            version=version,
+            dimensions=dimensions,
+        )
+
+    def mark_chunk_embedding_errors(self, items: Sequence[tuple[int, str]]) -> int:
+        """Сохранить пакет ошибок индексации за одну транзакцию.
+
+        Args:
+            items: Пары `(chunk_id, error_text)` для обновления статуса.
+
+        Returns:
+            Число чанков, переведенных в состояние `error`.
+        """
+        if not items:
+            return 0
+
+        payload = [(chunk_id, error_text[:1000]) for chunk_id, error_text in items]
+        with self._connect() as connection, connection.cursor() as cursor:
+            execute_values(
+                cursor,
+                """
+                UPDATE dictionary_chunk_embeddings AS target
+                SET embedding_status = 'error',
+                    last_error = source.error_text
+                FROM (
+                    VALUES %s
+                ) AS source(chunk_id, error_text)
+                WHERE target.chunk_id = source.chunk_id
+                """,
+                payload,
+            )
+            updated = int(cursor.rowcount)
+            connection.commit()
+        return updated
+
+    def mark_chunk_embedding_error(self, chunk_id: int, error_text: str) -> None:
+        """Сохранить ошибку индексации чанка.
+
+        Args:
+            chunk_id: Идентификатор чанка.
+            error_text: Текст ошибки, возникшей при индексации.
+        """
+        self.mark_chunk_embedding_errors(((chunk_id, error_text),))
+
+    def semantic_search(self, embedding: str, top_k: int) -> list[SemanticSearchCandidate]:
+        """Выполнить семантический поиск по pgvector-индексу.
+
+        Args:
+            embedding: Вектор запроса в формате литерала pgvector.
+            top_k: Максимальное число возвращаемых кандидатов.
+
+        Returns:
+            Список семантических кандидатов с расстоянием до запроса.
+        """
+        with (
+            self._connect() as connection,
+            connection.cursor(cursor_factory=RealDictCursor) as cursor,
+        ):
+            cursor.execute(
+                """
+                SELECT
+                    chunks.chunk_id,
+                    chunks.entry_id,
+                    chunks.chunk_type,
+                    chunks.chunk_text,
+                    chunks.distance
+                FROM (
+                    SELECT
+                        entry_chunks.id AS chunk_id,
+                        entry_chunks.entry_id,
+                        entry_chunks.chunk_type,
+                        entry_chunks.chunk_text,
+                        embeddings.embedding <=> %s::vector AS distance
+                    FROM dictionary_chunk_embeddings AS embeddings
+                    JOIN dictionary_entry_chunks AS entry_chunks
+                        ON entry_chunks.id = embeddings.chunk_id
+                    WHERE entry_chunks.source = %s
+                      AND embeddings.embedding_status = 'ready'
+                      AND embeddings.embedding IS NOT NULL
+                    ORDER BY embeddings.embedding <=> %s::vector
+                    LIMIT %s
+                ) AS chunks
+                ORDER BY chunks.distance ASC, chunks.chunk_id ASC
+                """,
+                (embedding, self._source.value, embedding, top_k),
+            )
+            rows = cursor.fetchall()
+
+            candidates: list[SemanticSearchCandidate] = []
+            for row in rows:
+                entry_row = self._fetch_entry_row(int(row["entry_id"]), cursor)
+                if entry_row is None:
+                    continue
+                candidates.append(
+                    SemanticSearchCandidate(
+                        entry=self._row_to_entry(entry_row),
+                        chunk_id=int(row["chunk_id"]),
+                        chunk_type=str(row["chunk_type"]).strip(),
+                        chunk_text=str(row["chunk_text"]),
+                        distance=float(row["distance"]),
+                    )
+                )
+
+        return candidates
 
     def import_entries(self, entries: Iterable[DictionaryEntry]) -> int:
         """Импортировать словарные статьи в PostgreSQL.

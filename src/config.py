@@ -40,6 +40,10 @@ class AppConfig(BaseSettings):
     db_user: str
     db_password: SecretStr
     db_name: str
+    rag_enabled: bool = True
+    rag_top_k: int = 5
+    rag_max_distance: float = 0.65
+    rag_index_batch_size: int = 1024
 
     @property
     def database(self) -> DatabaseConfig:
