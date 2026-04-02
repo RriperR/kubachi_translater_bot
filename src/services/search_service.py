@@ -79,19 +79,13 @@ class CsvSearchProvider:
         score = 0
         word_candidates = comma_values(entry.word)
         translation_tokens = set(tokenize(entry.translation))
-        example_tokens = set(token for example in entry.examples for token in tokenize(example))
-        note_tokens = set(token for note in entry.notes for token in tokenize(note))
         comment_tokens = set(tokenize(entry.comments))
 
         if query in word_candidates:
             score = max(score, 500)
         if query in translation_tokens:
             score = max(score, 350)
-        if query in example_tokens:
-            score = max(score, 180)
-        if query in note_tokens:
-            score = max(score, 150)
-        if query in comment_tokens:
+        if entry.source == DictionarySource.CORE and query in comment_tokens:
             score = max(score, 120)
         return score
 
