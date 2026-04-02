@@ -57,7 +57,7 @@ index-rag:
 	uv run python src/index_rag.py
 
 benchmark-retrieval:
-	DB_HOST=localhost DB_PORT=5434 uv run python -m benchmarks.retrieval $(ARGS)
+	set "DB_HOST=localhost" && set "DB_PORT=5434" && uv run python -m benchmarks.retrieval $(ARGS)
 
 db-upgrade:
 	docker compose run --rm --build bot python -m alembic -c alembic.ini upgrade head
