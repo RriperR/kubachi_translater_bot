@@ -294,9 +294,8 @@ class PostgresDictionaryRepository:
                 """,
                 payload,
             )
-            updated = int(cursor.rowcount)
             connection.commit()
-        return updated
+        return len(payload)
 
     def store_chunk_embedding(
         self,
@@ -352,9 +351,8 @@ class PostgresDictionaryRepository:
                 """,
                 payload,
             )
-            updated = int(cursor.rowcount)
             connection.commit()
-        return updated
+        return len(payload)
 
     def mark_chunk_embedding_error(self, chunk_id: int, error_text: str) -> None:
         """Сохранить ошибку индексации чанка.
