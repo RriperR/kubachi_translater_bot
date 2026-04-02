@@ -65,6 +65,30 @@ class PostgresRepository:
                     )
                     """
                 )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS dictionary_entries (
+                        id BIGSERIAL PRIMARY KEY,
+                        source TEXT NOT NULL CHECK (source IN ('core', 'user')),
+                        word TEXT NOT NULL,
+                        translation TEXT NOT NULL,
+                        examples TEXT[] NOT NULL DEFAULT '{}',
+                        notes TEXT[] NOT NULL DEFAULT '{}',
+                        comments TEXT NOT NULL DEFAULT '',
+                        contributor_username TEXT,
+                        contributor_first_name TEXT,
+                        contributor_last_name TEXT,
+                        banner TEXT,
+                        UNIQUE (source, word, translation)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_entries_source
+                    ON dictionary_entries(source)
+                    """
+                )
             connection.commit()
 
     def ensure_user(self, user: TelegramUser) -> None:
