@@ -95,50 +95,6 @@ class PostgresDictionaryRepository:
         rows = self._fetch_entry_rows(query_name, parameters, limit=_CANDIDATE_LIMIT)
         return [self._row_to_entry(row) for row in rows]
 
-    def sync_normalized_storage(self) -> int:
-        """Перенести legacy-поля статьи в нормализованные дочерние таблицы.
-
-        Returns:
-            Количество обработанных статей выбранного источника.
-        """
-        with (
-            self._connect() as connection,
-            connection.cursor(cursor_factory=RealDictCursor) as cursor,
-        ):
-            cursor.execute(
-                """
-                SELECT
-                    id,
-                    source,
-                    word,
-                    translation,
-                    examples,
-                    notes,
-                    comments,
-                    contributor_id,
-                    contributor_username,
-                    contributor_first_name,
-                    contributor_last_name
-                FROM dictionary_entries
-                WHERE source = %s
-                ORDER BY id
-                """,
-                (self._source.value,),
-            )
-            rows = cursor.fetchall()
-
-            for row in rows:
-                entry_id = int(row["id"])
-                contributor_id = self._sync_entry_contributor(cursor, row)
-                self._sync_examples_from_legacy(cursor, entry_id, tuple(row.get("examples") or ()))
-                self._sync_notes_from_legacy(cursor, entry_id, tuple(row.get("notes") or ()))
-                self._sync_comments_from_legacy(cursor, entry_id, str(row.get("comments") or ""))
-                self._refresh_entry_cache(cursor, entry_id, contributor_id)
-
-            connection.commit()
-
-        return len(rows)
-
     def sync_rag_chunks(self) -> int:
         """Синхронизировать RAG-чанки со словарными статьями текущего источника.
 
@@ -489,41 +445,23 @@ class PostgresDictionaryRepository:
         Returns:
             Число реально добавленных статей.
         """
-        payload = [self._entry_to_row(entry) for entry in entries]
+        payload = list(entries)
         if not payload:
             return 0
 
         inserted = 0
         with self._connect() as connection:
-            with connection.cursor() as cursor:
-                for row in payload:
-                    cursor.execute(
-                        """
-                        INSERT INTO dictionary_entries (
-                            source,
-                            word,
-                            translation,
-                            examples,
-                            notes,
-                            comments,
-                            normalized_word,
-                            normalized_translation,
-                            normalized_comments,
-                            normalized_search_text,
-                            contributor_username,
-                            contributor_first_name,
-                            contributor_last_name,
-                            banner
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (source, word, translation) DO NOTHING
-                        """,
-                        row,
-                    )
-                    inserted += cursor.rowcount
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                for entry in payload:
+                    entry_id = self._insert_entry(cursor, entry)
+                    if entry_id is None:
+                        continue
+                    inserted += 1
+                    self._replace_examples(cursor, entry_id, entry.examples)
+                    self._replace_notes(cursor, entry_id, entry.notes)
+                    self._replace_comments(cursor, entry_id, entry.comments)
             connection.commit()
 
-        self.sync_normalized_storage()
         self.sync_rag_chunks()
         return inserted
 
@@ -556,60 +494,27 @@ class PostgresDictionaryRepository:
             self._connect() as connection,
             connection.cursor(cursor_factory=RealDictCursor) as cursor,
         ):
-            contributor_id = self._ensure_contributor(cursor, entry.contributor)
-            cursor.execute(
-                """
-                INSERT INTO dictionary_entries (
-                    source,
-                    word,
-                    translation,
-                    examples,
-                    notes,
-                    comments,
-                    normalized_word,
-                    normalized_translation,
-                    normalized_comments,
-                    normalized_search_text,
-                    contributor_id,
-                    contributor_username,
-                    contributor_first_name,
-                    contributor_last_name,
-                    banner
-                )
-                VALUES (%s, %s, %s, %s, %s, '', %s, %s, '', %s, %s, %s, %s, %s, NULL)
-                RETURNING id
-                """,
-                (
-                    self._source.value,
-                    entry.word,
-                    entry.translation,
-                    list(examples),
-                    list(notes),
-                    normalize_query(entry.word),
-                    self._normalize_token_text(entry.translation),
-                    self._build_search_text(
-                        entry.word,
-                        entry.translation,
-                        examples,
-                        notes,
-                        "",
-                    ),
-                    contributor_id,
-                    entry.contributor.username,
-                    entry.contributor.first_name,
-                    entry.contributor.last_name,
+            inserted_id = self._insert_entry(
+                cursor,
+                DictionaryEntry(
+                    source=self._source,
+                    word=entry.word,
+                    translation=entry.translation,
+                    examples=examples,
+                    notes=notes,
+                    contributor_username=entry.contributor.username,
+                    contributor_first_name=entry.contributor.first_name,
+                    contributor_last_name=entry.contributor.last_name,
                 ),
+                chat_id=entry.contributor.chat_id,
             )
-            inserted_row = cursor.fetchone()
-            if inserted_row is None:
+            if inserted_id is None:
                 connection.commit()
                 return
 
-            entry_id = int(inserted_row["id"])
-            self._replace_examples(cursor, entry_id, examples)
-            self._replace_notes(cursor, entry_id, notes)
-            self._refresh_entry_cache(cursor, entry_id, contributor_id)
-            self._sync_rag_chunks_for_entry(cursor, entry_id)
+            self._replace_examples(cursor, inserted_id, examples)
+            self._replace_notes(cursor, inserted_id, notes)
+            self._sync_rag_chunks_for_entry(cursor, inserted_id)
             connection.commit()
 
     def append_comment(self, title: str, comment: str, author: TelegramUser) -> bool:
@@ -666,7 +571,6 @@ class PostgresDictionaryRepository:
                     self._normalize_token_text(comment_line),
                 ),
             )
-            self._refresh_entry_cache(cursor, entry_id)
             self._sync_rag_chunks_for_entry(cursor, entry_id)
             connection.commit()
         return True
@@ -813,29 +717,6 @@ class PostgresDictionaryRepository:
             ),
         )
 
-    def _sync_entry_contributor(self, cursor: Any, row: dict[str, Any]) -> int | None:
-        if row.get("contributor_id") is not None:
-            return int(row["contributor_id"])
-
-        username = self._strip_text(row.get("contributor_username"))
-        first_name = self._strip_text(row.get("contributor_first_name")) or ""
-        last_name = self._strip_text(row.get("contributor_last_name")) or ""
-        if username is None and first_name == "" and last_name == "":
-            return None
-
-        contributor_id = self._find_or_create_contributor(
-            cursor,
-            chat_id=None,
-            username=username,
-            first_name=first_name,
-            last_name=last_name,
-        )
-        cursor.execute(
-            "UPDATE dictionary_entries SET contributor_id = %s WHERE id = %s",
-            (contributor_id, int(row["id"])),
-        )
-        return contributor_id
-
     def _ensure_contributor(self, cursor: Any, contributor: TelegramUser) -> int:
         return self._find_or_create_contributor(
             cursor,
@@ -912,40 +793,59 @@ class PostgresDictionaryRepository:
             raise RuntimeError("Не удалось создать автора словарной статьи")
         return int(inserted["id"])
 
-    def _sync_examples_from_legacy(
+    def _insert_entry(
         self,
         cursor: Any,
-        entry_id: int,
-        examples: tuple[str, ...],
-    ) -> None:
-        if self._has_child_rows(cursor, "dictionary_entry_examples", entry_id):
-            return
-        self._replace_examples(cursor, entry_id, compact_lines(examples))
-
-    def _sync_notes_from_legacy(self, cursor: Any, entry_id: int, notes: tuple[str, ...]) -> None:
-        if self._has_child_rows(cursor, "dictionary_entry_notes", entry_id):
-            return
-        self._replace_notes(cursor, entry_id, compact_lines(notes))
-
-    def _sync_comments_from_legacy(self, cursor: Any, entry_id: int, comments: str) -> None:
-        if self._has_child_rows(cursor, "dictionary_entry_comments", entry_id):
-            return
-
-        comment_lines = compact_lines(comments.splitlines())
-        if not comment_lines:
-            return
-
-        cursor.executemany(
+        entry: DictionaryEntry,
+        chat_id: int | None = None,
+    ) -> int | None:
+        contributor_id = self._resolve_entry_contributor_id(cursor, entry, chat_id)
+        cursor.execute(
             """
-            INSERT INTO dictionary_entry_comments (
-                entry_id,
-                contributor_id,
-                text,
-                normalized_text
+            INSERT INTO dictionary_entries (
+                source,
+                word,
+                translation,
+                normalized_word,
+                normalized_translation,
+                contributor_id
             )
-            VALUES (%s, NULL, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (source, word, translation) DO NOTHING
+            RETURNING id
             """,
-            [(entry_id, line, self._normalize_token_text(line)) for line in comment_lines],
+            (
+                self._source.value,
+                entry.word,
+                entry.translation,
+                normalize_query(entry.word),
+                self._normalize_token_text(entry.translation),
+                contributor_id,
+            ),
+        )
+        inserted = cursor.fetchone()
+        if inserted is None:
+            return None
+        return int(inserted["id"])
+
+    def _resolve_entry_contributor_id(
+        self,
+        cursor: Any,
+        entry: DictionaryEntry,
+        chat_id: int | None,
+    ) -> int | None:
+        username = self._strip_text(entry.contributor_username)
+        first_name = self._strip_text(entry.contributor_first_name) or ""
+        last_name = self._strip_text(entry.contributor_last_name) or ""
+        if chat_id is None and username is None and first_name == "" and last_name == "":
+            return None
+
+        return self._find_or_create_contributor(
+            cursor,
+            chat_id=chat_id,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
         )
 
     def _replace_examples(self, cursor: Any, entry_id: int, examples: tuple[str, ...]) -> None:
@@ -990,52 +890,23 @@ class PostgresDictionaryRepository:
             ],
         )
 
-    def _refresh_entry_cache(
-        self,
-        cursor: Any,
-        entry_id: int,
-        contributor_id: int | None = None,
-    ) -> None:
-        row = self._fetch_entry_row(entry_id, cursor)
-        if row is None:
+    def _replace_comments(self, cursor: Any, entry_id: int, comments: str) -> None:
+        cursor.execute("DELETE FROM dictionary_entry_comments WHERE entry_id = %s", (entry_id,))
+        comment_lines = compact_lines(comments.splitlines())
+        if not comment_lines:
             return
 
-        effective_contributor_id = contributor_id
-        if effective_contributor_id is None:
-            cursor.execute(
-                "SELECT contributor_id FROM dictionary_entries WHERE id = %s",
-                (entry_id,),
-            )
-            contributor_row = cursor.fetchone()
-            if contributor_row is not None:
-                effective_contributor_id = contributor_row["contributor_id"]
-
-        cursor.execute(
+        cursor.executemany(
             """
-            UPDATE dictionary_entries
-            SET examples = %s,
-                notes = %s,
-                comments = %s,
-                normalized_comments = %s,
-                normalized_search_text = %s,
-                contributor_id = COALESCE(%s, contributor_id)
-            WHERE id = %s
-            """,
-            (
-                list(row.get("examples") or ()),
-                list(row.get("notes") or ()),
-                str(row.get("comments") or ""),
-                self._normalize_token_text(str(row.get("comments") or "")),
-                self._build_search_text(
-                    str(row["word"]),
-                    str(row["translation"]),
-                    tuple(row.get("examples") or ()),
-                    tuple(row.get("notes") or ()),
-                    str(row.get("comments") or ""),
-                ),
-                effective_contributor_id,
+            INSERT INTO dictionary_entry_comments (
                 entry_id,
-            ),
+                contributor_id,
+                text,
+                normalized_text
+            )
+            VALUES (%s, NULL, %s, %s)
+            """,
+            [(entry_id, line, self._normalize_token_text(line)) for line in comment_lines],
         )
 
     def _sync_rag_chunks_for_entry(self, cursor: Any, entry_id: int) -> int:
@@ -1138,67 +1009,9 @@ class PostgresDictionaryRepository:
             for chunk_type, source_row_id, chunk_order, chunk_text in raw_chunks
         ]
 
-    def _entry_to_row(self, entry: DictionaryEntry) -> tuple[object, ...]:
-        return (
-            self._source.value,
-            entry.word,
-            entry.translation,
-            list(entry.examples),
-            list(entry.notes),
-            entry.comments,
-            normalize_query(entry.word),
-            self._normalize_token_text(entry.translation),
-            self._normalize_token_text(entry.comments),
-            self._build_search_text(
-                entry.word,
-                entry.translation,
-                entry.examples,
-                entry.notes,
-                entry.comments,
-            ),
-            entry.contributor_username,
-            entry.contributor_first_name,
-            entry.contributor_last_name,
-            None,
-        )
-
-    @staticmethod
-    def _build_search_text(
-        word: str,
-        translation: str,
-        examples: Iterable[str],
-        notes: Iterable[str],
-        comments: str,
-    ) -> str:
-        parts = [
-            normalize_query(word),
-            PostgresDictionaryRepository._normalize_token_text(translation),
-            *(PostgresDictionaryRepository._normalize_token_text(example) for example in examples),
-            *(PostgresDictionaryRepository._normalize_token_text(note) for note in notes),
-            PostgresDictionaryRepository._normalize_token_text(comments),
-        ]
-        return " ".join(part for part in parts if part)
-
     @staticmethod
     def _normalize_token_text(text: str) -> str:
         return " ".join(tokenize(text))
-
-    @staticmethod
-    def _has_child_rows(cursor: Any, table_name: str, entry_id: int) -> bool:
-        allowed_queries = {
-            "dictionary_entry_examples": (
-                "SELECT 1 FROM dictionary_entry_examples WHERE entry_id = %s LIMIT 1"
-            ),
-            "dictionary_entry_notes": (
-                "SELECT 1 FROM dictionary_entry_notes WHERE entry_id = %s LIMIT 1"
-            ),
-            "dictionary_entry_comments": (
-                "SELECT 1 FROM dictionary_entry_comments WHERE entry_id = %s LIMIT 1"
-            ),
-        }
-        query = allowed_queries[table_name]
-        cursor.execute(query, (entry_id,))
-        return cursor.fetchone() is not None
 
     @staticmethod
     def _strip_text(value: object | None) -> str | None:

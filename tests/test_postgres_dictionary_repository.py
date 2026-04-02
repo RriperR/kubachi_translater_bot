@@ -17,19 +17,6 @@ def test_normalize_token_text_strips_punctuation_between_tokens() -> None:
     )
 
 
-def test_build_search_text_uses_token_normalization_for_translation() -> None:
-    """Поле полного поиска должно содержать перевод без пунктуации внутри токенов."""
-    search_text = PostgresDictionaryRepository._build_search_text(
-        word="салам",
-        translation="привет, приветствие",
-        examples=(),
-        notes=(),
-        comments="",
-    )
-
-    assert search_text == "салам привет приветствие"
-
-
 def test_build_rag_chunks_splits_entry_into_semantic_parts() -> None:
     """RAG-подготовка должна собирать чанки по статье, примерам, заметкам и комментариям."""
     repository = PostgresDictionaryRepository(
