@@ -31,7 +31,7 @@ class PostgresRepository:
             host=self._config.host,
             port=self._config.port,
             user=self._config.user,
-            password=self._config.password,
+            password=self._config.password.get_secret_value(),
             dbname=self._config.database,
         )
         try:

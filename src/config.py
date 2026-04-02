@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -19,7 +19,7 @@ class DatabaseConfig(BaseModel):
     host: str
     port: int
     user: str
-    password: str
+    password: SecretStr
     database: str
 
 
@@ -30,16 +30,17 @@ class AppConfig(BaseSettings):
         env_file=(PROJECT_ROOT / ".env", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
+        case_sensitive=False,
         frozen=True,
     )
 
-    bot_token: str = Field(validation_alias="BOT_TOKEN")
-    admin_chat_id: int | None = Field(default=None, validation_alias="ADMIN_CHAT_ID")
-    db_host: str = Field(validation_alias="DB_HOST", exclude=True)
-    db_port: int = Field(validation_alias="DB_PORT", exclude=True)
-    db_user: str = Field(validation_alias="DB_USER", exclude=True)
-    db_password: str = Field(validation_alias="DB_PASSWORD", exclude=True, repr=False)
-    db_name: str = Field(validation_alias="DB_NAME", exclude=True)
+    bot_token: SecretStr
+    admin_chat_id: int | None = None
+    db_host: str
+    db_port: int
+    db_user: str
+    db_password: SecretStr
+    db_name: str
     main_dictionary_path: Path = BASE_DIR / "Slovar_14_08.csv"
     user_dictionary_path: Path = BASE_DIR / "users_translates.csv"
 

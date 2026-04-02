@@ -57,7 +57,7 @@ class DictionaryBotApp:
             config: Конфигурация приложения и пути к словарным данным.
         """
         self._config = config
-        self._bot = Bot(token=config.bot_token)
+        self._bot = Bot(token=config.bot_token.get_secret_value())
         self._dispatcher = Dispatcher()
         self._router = Router()
         self._dispatcher.include_router(self._router)
