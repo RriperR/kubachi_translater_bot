@@ -163,11 +163,22 @@ class PostgresDictionaryRepository:
 
         return total_chunks
 
-    def fetch_pending_rag_chunks(self, limit: int) -> list[RagChunkRecord]:
+    def fetch_pending_rag_chunks(
+        self,
+        limit: int,
+        provider: str,
+        model: str,
+        version: str,
+        dimensions: int,
+    ) -> list[RagChunkRecord]:
         """Вернуть чанки, для которых нужно посчитать или обновить эмбеддинги.
 
         Args:
             limit: Максимальное количество чанков за один проход.
+            provider: Имя активного embedding provider.
+            model: Имя активной embedding-модели.
+            version: Версия логики embeddings.
+            dimensions: Ожидаемая размерность embeddings.
 
         Returns:
             Список чанков выбранного источника, ожидающих индексации.
@@ -193,11 +204,15 @@ class PostgresDictionaryRepository:
                   AND (
                     embeddings.embedding_status <> 'ready'
                     OR embeddings.embedding IS NULL
+                    OR embeddings.embedding_provider IS DISTINCT FROM %s
+                    OR embeddings.embedding_model IS DISTINCT FROM %s
+                    OR embeddings.embedding_version IS DISTINCT FROM %s
+                    OR embeddings.vector_dimensions IS DISTINCT FROM %s
                   )
                 ORDER BY chunks.id
                 LIMIT %s
                 """,
-                (self._source.value, limit),
+                (self._source.value, provider, model, version, dimensions, limit),
             )
             rows = cursor.fetchall()
 
@@ -214,8 +229,20 @@ class PostgresDictionaryRepository:
             for row in rows
         ]
 
-    def count_pending_rag_chunks(self) -> int:
+    def count_pending_rag_chunks(
+        self,
+        provider: str,
+        model: str,
+        version: str,
+        dimensions: int,
+    ) -> int:
         """Подсчитать число чанков, которые еще не имеют актуального embedding.
+
+        Args:
+            provider: Имя активного embedding provider.
+            model: Имя активной embedding-модели.
+            version: Версия логики embeddings.
+            dimensions: Ожидаемая размерность embeddings.
 
         Returns:
             Количество pending/error-чанков текущего словарного источника.
@@ -231,9 +258,13 @@ class PostgresDictionaryRepository:
                   AND (
                     embeddings.embedding_status <> 'ready'
                     OR embeddings.embedding IS NULL
+                    OR embeddings.embedding_provider IS DISTINCT FROM %s
+                    OR embeddings.embedding_model IS DISTINCT FROM %s
+                    OR embeddings.embedding_version IS DISTINCT FROM %s
+                    OR embeddings.vector_dimensions IS DISTINCT FROM %s
                   )
                 """,
-                (self._source.value,),
+                (self._source.value, provider, model, version, dimensions),
             )
             row = cursor.fetchone()
             if row is None:
@@ -363,12 +394,24 @@ class PostgresDictionaryRepository:
         """
         self.mark_chunk_embedding_errors(((chunk_id, error_text),))
 
-    def semantic_search(self, embedding: str, top_k: int) -> list[SemanticSearchCandidate]:
+    def semantic_search(
+        self,
+        embedding: str,
+        top_k: int,
+        provider: str,
+        model: str,
+        version: str,
+        dimensions: int,
+    ) -> list[SemanticSearchCandidate]:
         """Выполнить семантический поиск по pgvector-индексу.
 
         Args:
             embedding: Вектор запроса в формате литерала pgvector.
             top_k: Максимальное число возвращаемых кандидатов.
+            provider: Имя активного embedding provider.
+            model: Имя активной embedding-модели.
+            version: Версия логики embeddings.
+            dimensions: Ожидаемая размерность embeddings.
 
         Returns:
             Список семантических кандидатов с расстоянием до запроса.
@@ -398,12 +441,25 @@ class PostgresDictionaryRepository:
                     WHERE entry_chunks.source = %s
                       AND embeddings.embedding_status = 'ready'
                       AND embeddings.embedding IS NOT NULL
+                      AND embeddings.embedding_provider IS NOT DISTINCT FROM %s
+                      AND embeddings.embedding_model IS NOT DISTINCT FROM %s
+                      AND embeddings.embedding_version IS NOT DISTINCT FROM %s
+                      AND embeddings.vector_dimensions IS NOT DISTINCT FROM %s
                     ORDER BY embeddings.embedding <=> %s::vector
                     LIMIT %s
                 ) AS chunks
                 ORDER BY chunks.distance ASC, chunks.chunk_id ASC
                 """,
-                (embedding, self._source.value, embedding, top_k),
+                (
+                    embedding,
+                    self._source.value,
+                    provider,
+                    model,
+                    version,
+                    dimensions,
+                    embedding,
+                    top_k,
+                ),
             )
             rows = cursor.fetchall()
 

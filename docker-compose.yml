@@ -5,6 +5,7 @@ services:
       - .env
     volumes:
       - ./src:/app/src
+      - hf_cache_slovar:/root/.cache/huggingface
     depends_on:
       db:
         condition: service_healthy
@@ -30,3 +31,4 @@ services:
 
 volumes:
   pgdata_slovar:
+  hf_cache_slovar:

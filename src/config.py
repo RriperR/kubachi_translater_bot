@@ -44,6 +44,11 @@ class AppConfig(BaseSettings):
     rag_top_k: int = 5
     rag_max_distance: float = 0.65
     rag_index_batch_size: int = 1024
+    rag_embedding_provider: str = "sentence-transformers"
+    rag_embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    rag_embedding_dimensions: int = 384
+    rag_embedding_batch_size: int = 64
+    rag_embedding_device: str = "cpu"
 
     @property
     def database(self) -> DatabaseConfig:

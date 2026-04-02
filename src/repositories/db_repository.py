@@ -17,13 +17,15 @@ from models import SearchMode, TelegramUser
 class PostgresRepository:
     """Репозиторий для работы с таблицами приложения в PostgreSQL."""
 
-    def __init__(self, config: DatabaseConfig) -> None:
+    def __init__(self, config: DatabaseConfig, rag_vector_dimensions: int = 384) -> None:
         """Сохранить параметры подключения к базе данных.
 
         Args:
             config: Настройки подключения к PostgreSQL.
+            rag_vector_dimensions: Размерность векторной колонки для pgvector.
         """
         self._config = config
+        self._rag_vector_dimensions = rag_vector_dimensions
 
     @contextmanager
     def _connect(self) -> Iterator[Any]:
@@ -349,8 +351,9 @@ class PostgresRepository:
                     USING GIN (to_tsvector('simple', normalized_chunk_text))
                     """
                 )
+                vector_type = f"vector({self._rag_vector_dimensions})"
                 cursor.execute(
-                    """
+                    f"""
                     CREATE TABLE IF NOT EXISTS dictionary_chunk_embeddings (
                         chunk_id BIGINT PRIMARY KEY
                             REFERENCES dictionary_entry_chunks(id) ON DELETE CASCADE,
@@ -361,7 +364,7 @@ class PostgresRepository:
                         embedding_status TEXT NOT NULL DEFAULT 'pending' CHECK (
                             embedding_status IN ('pending', 'ready', 'error')
                         ),
-                        embedding vector(256),
+                        embedding {vector_type},
                         content_hash TEXT NOT NULL DEFAULT '',
                         last_indexed_at TIMESTAMPTZ,
                         last_error TEXT NOT NULL DEFAULT ''
@@ -370,10 +373,44 @@ class PostgresRepository:
                 )
                 cursor.execute(
                     """
-                    ALTER TABLE dictionary_chunk_embeddings
-                    ADD COLUMN IF NOT EXISTS embedding vector(256)
+                    SELECT format_type(a.atttypid, a.atttypmod)
+                    FROM pg_attribute AS a
+                    JOIN pg_class AS c ON c.oid = a.attrelid
+                    WHERE c.relname = 'dictionary_chunk_embeddings'
+                      AND a.attname = 'embedding'
+                      AND NOT a.attisdropped
                     """
                 )
+                embedding_row = cursor.fetchone()
+                embedding_type = (
+                    str(embedding_row[0]) if embedding_row and embedding_row[0] else None
+                )
+                if embedding_type is None:
+                    cursor.execute(
+                        f"""
+                        ALTER TABLE dictionary_chunk_embeddings
+                        ADD COLUMN embedding {vector_type}
+                        """
+                    )
+                elif embedding_type != vector_type:
+                    cursor.execute("DROP INDEX IF EXISTS idx_dictionary_chunk_embeddings_hnsw")
+                    cursor.execute(
+                        """
+                        UPDATE dictionary_chunk_embeddings
+                        SET embedding = NULL,
+                            vector_dimensions = NULL,
+                            embedding_status = 'pending',
+                            last_indexed_at = NULL,
+                            last_error = ''
+                        """
+                    )
+                    cursor.execute(
+                        f"""
+                        ALTER TABLE dictionary_chunk_embeddings
+                        ALTER COLUMN embedding TYPE {vector_type}
+                        USING NULL
+                        """
+                    )
                 cursor.execute(
                     """
                     CREATE INDEX IF NOT EXISTS idx_dictionary_chunk_embeddings_hnsw

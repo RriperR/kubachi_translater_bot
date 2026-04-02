@@ -16,7 +16,10 @@ BASE_DIR = Path(__file__).resolve().parent
 def run() -> None:
     """Импортировать основной и пользовательский словари из CSV в PostgreSQL."""
     config = load_config()
-    db_repository = PostgresRepository(config.database)
+    db_repository = PostgresRepository(
+        config.database,
+        rag_vector_dimensions=config.rag_embedding_dimensions,
+    )
     db_repository.ensure_schema()
 
     main_csv_repository = CsvDictionaryRepository(

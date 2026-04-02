@@ -26,7 +26,7 @@ from normalization import normalize_kubachi_word
 from repositories.db_repository import PostgresRepository
 from repositories.postgres_dictionary_repository import PostgresDictionaryRepository
 from services.export_service import DatabaseExportService
-from services.rag_service import HashEmbeddingProvider, PgvectorSearchProvider
+from services.rag_service import PgvectorSearchProvider, build_embedding_provider
 from services.search_service import CsvSearchProvider, DictionarySearchService, format_entry
 from services.session_store import SessionStore
 
@@ -65,10 +65,13 @@ class DictionaryBotApp:
         self._dispatcher.include_router(self._router)
 
         self._session_store = SessionStore()
-        self._db_repository = PostgresRepository(config.database)
+        self._db_repository = PostgresRepository(
+            config.database,
+            rag_vector_dimensions=config.rag_embedding_dimensions,
+        )
         self._main_repository = PostgresDictionaryRepository(config.database, DictionarySource.CORE)
         self._user_repository = PostgresDictionaryRepository(config.database, DictionarySource.USER)
-        self._embedding_provider = HashEmbeddingProvider()
+        self._embedding_provider = build_embedding_provider(config)
         semantic_providers: tuple[Any, ...] = ()
         if config.rag_enabled:
             semantic_providers = (

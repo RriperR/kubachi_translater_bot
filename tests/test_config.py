@@ -28,3 +28,11 @@ def test_app_config_loads_from_env(monkeypatch) -> None:
     assert config.rag_top_k == 5
     assert config.rag_max_distance == 0.65
     assert config.rag_index_batch_size == 1024
+    assert config.rag_embedding_provider == "sentence-transformers"
+    assert (
+        config.rag_embedding_model
+        == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    )
+    assert config.rag_embedding_dimensions == 384
+    assert config.rag_embedding_batch_size == 64
+    assert config.rag_embedding_device == "cpu"

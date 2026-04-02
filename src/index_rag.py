@@ -8,7 +8,7 @@ from config import load_config
 from models import DictionarySource
 from repositories.db_repository import PostgresRepository
 from repositories.postgres_dictionary_repository import PostgresDictionaryRepository
-from services.rag_service import DictionaryRagIndexer, HashEmbeddingProvider
+from services.rag_service import DictionaryRagIndexer, build_embedding_provider
 
 
 def run() -> None:
@@ -18,7 +18,10 @@ def run() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     config = load_config()
-    db_repository = PostgresRepository(config.database)
+    db_repository = PostgresRepository(
+        config.database,
+        rag_vector_dimensions=config.rag_embedding_dimensions,
+    )
     db_repository.ensure_schema()
 
     repositories = (
@@ -27,7 +30,7 @@ def run() -> None:
     )
     indexer = DictionaryRagIndexer(
         repositories,
-        HashEmbeddingProvider(),
+        build_embedding_provider(config),
         batch_size=config.rag_index_batch_size,
     )
     indexed = indexer.sync_pending()

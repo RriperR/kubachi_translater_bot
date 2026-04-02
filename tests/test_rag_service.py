@@ -30,17 +30,33 @@ class SemanticRepositoryStub:
         """
         self._candidates = candidates
 
-    def semantic_search(self, embedding: str, top_k: int) -> list[SemanticSearchCandidate]:
+    def semantic_search(
+        self,
+        embedding: str,
+        top_k: int,
+        provider: str,
+        model: str,
+        version: str,
+        dimensions: int,
+    ) -> list[SemanticSearchCandidate]:
         """Вернуть подготовленных семантических кандидатов.
 
         Args:
             embedding: Сериализованный embedding поискового запроса.
             top_k: Максимальное число возвращаемых кандидатов.
+            provider: Имя embedding provider.
+            model: Имя embedding-модели.
+            version: Версия логики embeddings.
+            dimensions: Размерность embeddings.
 
         Returns:
             Срез заранее подготовленного списка кандидатов.
         """
         assert embedding.startswith("[")
+        assert provider == "local"
+        assert model == "hash-embedding"
+        assert version == "v1"
+        assert dimensions == 32
         return self._candidates[:top_k]
 
 
@@ -58,23 +74,54 @@ class IndexRepositoryStub:
         self.stored_batches: list[list[tuple[int, str]]] = []
         self.error_batches: list[list[tuple[int, str]]] = []
 
-    def count_pending_rag_chunks(self) -> int:
+    def count_pending_rag_chunks(
+        self,
+        provider: str,
+        model: str,
+        version: str,
+        dimensions: int,
+    ) -> int:
         """Вернуть размер очереди pending-чанков.
+
+        Args:
+            provider: Имя embedding provider.
+            model: Имя embedding-модели.
+            version: Версия логики embeddings.
+            dimensions: Размерность embeddings.
 
         Returns:
             Число чанков, еще не выданных индексатору.
         """
+        assert provider == "local"
+        assert model == "hash-embedding"
+        assert version == "v1"
+        assert dimensions == 32
         return len(self._chunks)
 
-    def fetch_pending_rag_chunks(self, limit: int) -> list[RagChunkRecord]:
+    def fetch_pending_rag_chunks(
+        self,
+        limit: int,
+        provider: str,
+        model: str,
+        version: str,
+        dimensions: int,
+    ) -> list[RagChunkRecord]:
         """Вернуть следующую пачку pending-чанков.
 
         Args:
             limit: Максимальный размер пакета.
+            provider: Имя embedding provider.
+            model: Имя embedding-модели.
+            version: Версия логики embeddings.
+            dimensions: Размерность embeddings.
 
         Returns:
             Следующая часть очереди чанков.
         """
+        assert provider == "local"
+        assert model == "hash-embedding"
+        assert version == "v1"
+        assert dimensions == 32
         batch = self._chunks[:limit]
         self._chunks = self._chunks[limit:]
         return batch
@@ -143,6 +190,22 @@ class FailingEmbeddingProvider(HashEmbeddingProvider):
             raise ValueError("boom")
         return super().embed(text)
 
+    def embed_many(self, texts: tuple[str, ...] | list[str]) -> list[EmbeddingVector]:
+        """Построить embeddings для набора текстов или выбросить общую ошибку.
+
+        Args:
+            texts: Последовательность текстов для пакетной индексации.
+
+        Returns:
+            Векторы в исходном порядке.
+
+        Raises:
+            ValueError: Если пакет содержит текст `broken`.
+        """
+        if any(text == "broken" for text in texts):
+            raise ValueError("boom")
+        return super().embed_many(texts)
+
 
 def test_hash_embedding_provider_is_deterministic() -> None:
     """Локальный embedder должен стабильно возвращать один и тот же вектор."""
@@ -150,8 +213,10 @@ def test_hash_embedding_provider_is_deterministic() -> None:
 
     first = provider.embed("салам привет")
     second = provider.embed("салам привет")
+    batch = provider.embed_many(["салам привет", "салам привет"])
 
     assert first == second
+    assert batch == [first, second]
     assert len(first.values) == 32
     assert math.isclose(sum(value * value for value in first.values), 1.0, rel_tol=1e-6)
 
