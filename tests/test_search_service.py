@@ -21,6 +21,30 @@ class InMemoryRepository:
         return self._entries
 
 
+class CandidateRepository(InMemoryRepository):
+    """Тестовый репозиторий с собственным этапом отбора кандидатов."""
+
+    def search_entries(self, query: str, mode: SearchMode) -> list[DictionaryEntry]:
+        """Вернуть ограниченный набор кандидатов.
+
+        Args:
+            query: Поисковый запрос пользователя.
+            mode: Режим поиска, переданный провайдеру.
+
+        Returns:
+            Только те статьи, которые репозиторий считает кандидатами.
+        """
+        assert query == "дом"
+        assert mode == SearchMode.LITE
+        return [
+            DictionaryEntry(
+                source=DictionarySource.CORE,
+                word="аIа",
+                translation="дом",
+            )
+        ]
+
+
 def test_lite_search_ignores_examples_and_notes() -> None:
     """Простой режим не должен искать по примерам и примечаниям."""
     provider = CsvSearchProvider(
@@ -39,6 +63,25 @@ def test_lite_search_ignores_examples_and_notes() -> None:
 
     assert provider.search("тестовая", SearchMode.LITE) == []
     assert provider.search("редкое", SearchMode.LITE) == []
+
+
+def test_provider_uses_repository_candidates_when_available() -> None:
+    """Провайдер должен брать кандидатов из репозитория, если тот поддерживает SQL-поиск."""
+    provider = CsvSearchProvider(
+        CandidateRepository(
+            [
+                DictionaryEntry(
+                    source=DictionarySource.CORE,
+                    word="сад",
+                    translation="огород",
+                )
+            ]
+        )
+    )
+
+    results = provider.search("дом", SearchMode.LITE)
+
+    assert [match.entry.title for match in results] == ["аIа - дом"]
 
 
 def test_lite_search_prefers_word_match_over_translation() -> None:

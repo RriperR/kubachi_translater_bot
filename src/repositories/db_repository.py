@@ -75,6 +75,10 @@ class PostgresRepository:
                         examples TEXT[] NOT NULL DEFAULT '{}',
                         notes TEXT[] NOT NULL DEFAULT '{}',
                         comments TEXT NOT NULL DEFAULT '',
+                        normalized_word TEXT NOT NULL DEFAULT '',
+                        normalized_translation TEXT NOT NULL DEFAULT '',
+                        normalized_comments TEXT NOT NULL DEFAULT '',
+                        normalized_search_text TEXT NOT NULL DEFAULT '',
                         contributor_username TEXT,
                         contributor_first_name TEXT,
                         contributor_last_name TEXT,
@@ -85,8 +89,105 @@ class PostgresRepository:
                 )
                 cursor.execute(
                     """
+                    ALTER TABLE dictionary_entries
+                    ADD COLUMN IF NOT EXISTS normalized_word TEXT NOT NULL DEFAULT ''
+                    """
+                )
+                cursor.execute(
+                    """
+                    ALTER TABLE dictionary_entries
+                    ADD COLUMN IF NOT EXISTS normalized_translation TEXT NOT NULL DEFAULT ''
+                    """
+                )
+                cursor.execute(
+                    """
+                    ALTER TABLE dictionary_entries
+                    ADD COLUMN IF NOT EXISTS normalized_comments TEXT NOT NULL DEFAULT ''
+                    """
+                )
+                cursor.execute(
+                    """
+                    ALTER TABLE dictionary_entries
+                    ADD COLUMN IF NOT EXISTS normalized_search_text TEXT NOT NULL DEFAULT ''
+                    """
+                )
+                cursor.execute(
+                    """
+                    UPDATE dictionary_entries
+                    SET normalized_word = btrim(
+                            regexp_replace(
+                                lower(translate(word, '1!l|I', 'iiiii')),
+                                '\s+',
+                                ' ',
+                                'g'
+                            )
+                        ),
+                        normalized_translation = btrim(
+                            regexp_replace(
+                                lower(translate(translation, '1!l|I', 'iiiii')),
+                                '\s+',
+                                ' ',
+                                'g'
+                            )
+                        ),
+                        normalized_comments = btrim(
+                            regexp_replace(
+                                lower(translate(comments, '1!l|I', 'iiiii')),
+                                '\s+',
+                                ' ',
+                                'g'
+                            )
+                        ),
+                        normalized_search_text = btrim(
+                            regexp_replace(
+                                lower(
+                                    translate(
+                                        concat_ws(
+                                            ' ',
+                                            word,
+                                            translation,
+                                            array_to_string(examples, ' '),
+                                            array_to_string(notes, ' '),
+                                            comments
+                                        ),
+                                        '1!l|I',
+                                        'iiiii'
+                                    )
+                                ),
+                                '\s+',
+                                ' ',
+                                'g'
+                            )
+                        )
+                    WHERE normalized_word = ''
+                       OR normalized_translation = ''
+                       OR normalized_search_text = ''
+                       OR (comments <> '' AND normalized_comments = '')
+                    """
+                )
+                cursor.execute(
+                    """
                     CREATE INDEX IF NOT EXISTS idx_dictionary_entries_source
                     ON dictionary_entries(source)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_entries_normalized_word
+                    ON dictionary_entries(source, normalized_word)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_entries_normalized_translation
+                    ON dictionary_entries(source, normalized_translation)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_entries_search_vector
+                    ON dictionary_entries
+                    USING GIN (to_tsvector('simple', normalized_search_text))
                     """
                 )
             connection.commit()

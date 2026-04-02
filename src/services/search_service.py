@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from models import DictionaryEntry, DictionarySource, SearchMatch, SearchMode
 from normalization import comma_values, normalize_query, tokenize
@@ -17,6 +17,23 @@ class EntryRepository(Protocol):
 
         Returns:
             Список словарных статей из выбранного источника.
+        """
+        ...
+
+
+@runtime_checkable
+class CandidateEntryRepository(Protocol):
+    """Контракт репозитория, который умеет отбирать кандидатов до ранжирования."""
+
+    def search_entries(self, query: str, mode: SearchMode) -> list[DictionaryEntry]:
+        """Вернуть только потенциально релевантные статьи.
+
+        Args:
+            query: Поисковый запрос пользователя.
+            mode: Режим поиска, влияющий на SQL-фильтрацию.
+
+        Returns:
+            Ограниченный список кандидатов для финального ранжирования в Python.
         """
         ...
 
@@ -61,12 +78,17 @@ class CsvSearchProvider:
         normalized_query = normalize_query(query)
         matches: list[SearchMatch] = []
 
-        for entry in self._repository.list_entries():
+        for entry in self._load_entries(query, mode):
             score = self._match_score(entry, normalized_query, mode)
             if score > 0:
                 matches.append(SearchMatch(entry=entry, score=score))
 
         return matches
+
+    def _load_entries(self, query: str, mode: SearchMode) -> list[DictionaryEntry]:
+        if isinstance(self._repository, CandidateEntryRepository):
+            return self._repository.search_entries(query, mode)
+        return self._repository.list_entries()
 
     def _match_score(self, entry: DictionaryEntry, query: str, mode: SearchMode) -> int:
         if not query:
