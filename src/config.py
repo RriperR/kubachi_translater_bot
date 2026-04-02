@@ -7,8 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-BASE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BASE_DIR.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class DatabaseConfig(BaseModel):
@@ -41,8 +40,6 @@ class AppConfig(BaseSettings):
     db_user: str
     db_password: SecretStr
     db_name: str
-    main_dictionary_path: Path = BASE_DIR / "Slovar_14_08.csv"
-    user_dictionary_path: Path = BASE_DIR / "users_translates.csv"
 
     @property
     def database(self) -> DatabaseConfig:
