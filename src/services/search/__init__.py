@@ -13,13 +13,10 @@ from .lexical import (
 )
 from .orchestrator import DictionarySearchService
 
-CsvSearchProvider = LexicalSearchProvider
-
 __all__ = [
     "DictionaryEntry",
     "DictionarySource",
     "CandidateEntryRepository",
-    "CsvSearchProvider",
     "DictionarySearchService",
     "EntryRepository",
     "LexicalSearchProvider",
