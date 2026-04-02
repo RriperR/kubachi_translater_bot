@@ -392,6 +392,47 @@ def test_pgvector_search_provider_requires_overlap_for_example_chunks() -> None:
     assert [match.entry.title for match in matches] == ["дихьхьана - мастер по насечке"]
 
 
+def test_pgvector_search_provider_prefers_title_or_translation_over_example_overlap() -> None:
+    """Example-чанки с overlap не должны вытеснять более прямой translation/title матч."""
+    provider = PgvectorSearchProvider(
+        repository=SemanticRepositoryStub(
+            [
+                SemanticSearchCandidate(
+                    entry=DictionaryEntry(
+                        source=DictionarySource.CORE,
+                        word="вякабечIии",
+                        translation="крикнуть, позвать",
+                    ),
+                    chunk_id=1,
+                    chunk_type="example",
+                    chunk_text="ххюлацце вякабечIи позвать гостей",
+                    distance=0.20,
+                ),
+                SemanticSearchCandidate(
+                    entry=DictionaryEntry(
+                        source=DictionarySource.CORE,
+                        word="яхши-хуш",
+                        translation="собирательное название приветствий при встрече",
+                    ),
+                    chunk_id=2,
+                    chunk_type="translation",
+                    chunk_text="собирательное название приветствий при встрече",
+                    distance=0.27,
+                ),
+            ]
+        ),
+        embedding_provider=HashEmbeddingProvider(dimensions=32),
+        top_k=3,
+        max_distance=0.65,
+    )
+
+    matches = provider.search("что говорят при встрече гостей", SearchMode.COMPLEX)
+
+    assert [match.entry.title for match in matches] == [
+        "яхши-хуш - собирательное название приветствий при встрече"
+    ]
+
+
 def test_dictionary_rag_indexer_indexes_batches_with_progress_units() -> None:
     """Индексатор должен сохранять embeddings пакетно и отдельно учитывать ошибки."""
     repository = IndexRepositoryStub(

@@ -84,6 +84,49 @@ _RUSSIAN_STEM_SUFFIXES = (
     "о",
     "ь",
 )
+RUSSIAN_SEARCH_STOPWORDS = frozenset(
+    {
+        "и",
+        "или",
+        "как",
+        "что",
+        "кто",
+        "где",
+        "куда",
+        "откуда",
+        "зачем",
+        "почему",
+        "ли",
+        "при",
+        "по",
+        "в",
+        "во",
+        "на",
+        "с",
+        "со",
+        "к",
+        "ко",
+        "у",
+        "о",
+        "об",
+        "про",
+        "для",
+        "из",
+        "а",
+        "но",
+        "же",
+        "это",
+        "этот",
+        "эта",
+        "эти",
+        "говорят",
+        "говорить",
+        "сказать",
+        "скажи",
+        "сказал",
+        "скажут",
+    }
+)
 
 
 def normalize_query(text: str) -> str:
@@ -158,6 +201,54 @@ def stem_tokens(text: str) -> tuple[str, ...]:
         Кортеж stem-токенов без пустых значений.
     """
     return tuple(stem for stem in (russian_stem(token) for token in tokenize(text)) if stem)
+
+
+def meaningful_tokens(
+    text: str,
+    *,
+    stopwords: Iterable[str] = (),
+    min_length: int = 3,
+) -> tuple[str, ...]:
+    """Оставить только значимые токены поискового запроса.
+
+    Args:
+        text: Исходный текст запроса или словарной статьи.
+        stopwords: Дополнительные stop-слова поверх базового русского набора.
+        min_length: Минимальная длина токена, который считается значимым.
+
+    Returns:
+        Кортеж токенов без коротких служебных слов и базовых русских stop-слов.
+    """
+    extra_stopwords = {normalize_query(word) for word in stopwords if normalize_query(word)}
+    active_stopwords = RUSSIAN_SEARCH_STOPWORDS | extra_stopwords
+    return tuple(
+        token
+        for token in tokenize(text)
+        if len(token) >= min_length and token not in active_stopwords
+    )
+
+
+def meaningful_stem_tokens(
+    text: str,
+    *,
+    stopwords: Iterable[str] = (),
+    min_length: int = 3,
+) -> tuple[str, ...]:
+    """Оставить только значимые stem-токены поискового запроса.
+
+    Args:
+        text: Исходный текст, который нужно привести к stem-токенам.
+        stopwords: Дополнительные stop-слова поверх базового русского набора.
+        min_length: Минимальная длина stem-токена.
+
+    Returns:
+        Кортеж значимых stem-токенов без служебных слов.
+    """
+    return tuple(
+        stem
+        for stem in (russian_stem(token) for token in meaningful_tokens(text, stopwords=stopwords))
+        if len(stem) >= min_length
+    )
 
 
 def split_values(text: str, separator: str) -> tuple[str, ...]:

@@ -7,7 +7,7 @@ from typing import Any
 from psycopg2.extras import RealDictCursor
 
 from models import DictionaryEntry, DictionarySource, SearchMode
-from normalization import normalize_query
+from normalization import meaningful_tokens, normalize_query
 
 from .base import PostgresRepositoryBase
 
@@ -168,13 +168,16 @@ class DictionarySearchRepositoryMixin(PostgresRepositoryBase):
                 ),
             )
 
+        meaningful_query = " ".join(meaningful_tokens(query))
+        effective_query = meaningful_query or query
+
         return (
             "search_complex",
             (
                 self._source.value,
-                query,
-                f"{query}%",
-                f"{query}%",
+                effective_query,
+                f"{effective_query}%",
+                f"{effective_query}%",
             ),
         )
 

@@ -5,44 +5,13 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from models import DictionaryEntry, DictionarySource, SearchMatch, SearchMode
-from normalization import comma_values, normalize_query, stem_tokens, tokenize
-
-_QUERY_STOPWORDS = frozenset(
-    {
-        "и",
-        "или",
-        "как",
-        "что",
-        "кто",
-        "где",
-        "куда",
-        "откуда",
-        "зачем",
-        "почему",
-        "ли",
-        "при",
-        "по",
-        "в",
-        "во",
-        "на",
-        "с",
-        "со",
-        "к",
-        "ко",
-        "у",
-        "о",
-        "об",
-        "про",
-        "для",
-        "из",
-        "а",
-        "но",
-        "же",
-        "это",
-        "этот",
-        "эта",
-        "эти",
-    }
+from normalization import (
+    comma_values,
+    meaningful_stem_tokens,
+    meaningful_tokens,
+    normalize_query,
+    stem_tokens,
+    tokenize,
 )
 
 
@@ -167,10 +136,13 @@ class LexicalSearchProvider:
         return max(max_bonus - position, 0)
 
     def _complex_score(self, entry: DictionaryEntry, query: str) -> int:
-        query_tokens = tokenize(query)
+        raw_query_tokens = tokenize(query)
+        query_tokens = self._meaningful_query_tokens(query) or raw_query_tokens
         if not query_tokens:
             return 0
-        query_stems = self._meaningful_query_stems(query)
+        query_stems = self._meaningful_query_stems(query) or tuple(
+            stem for stem in (meaningful_stem_tokens(query) or stem_tokens(query)) if stem
+        )
 
         normalized_title = normalize_query(entry.title)
         word_candidates = comma_values(entry.word)
@@ -344,10 +316,12 @@ class LexicalSearchProvider:
         return distance
 
     @staticmethod
+    def _meaningful_query_tokens(query: str) -> tuple[str, ...]:
+        return meaningful_tokens(query)
+
+    @staticmethod
     def _meaningful_query_stems(query: str) -> tuple[str, ...]:
-        return tuple(
-            stem for stem in stem_tokens(query) if len(stem) > 2 and stem not in _QUERY_STOPWORDS
-        )
+        return meaningful_stem_tokens(query)
 
     @staticmethod
     def _has_stem_coverage(tokens: tuple[str, ...], query_stems: tuple[str, ...]) -> bool:

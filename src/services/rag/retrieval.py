@@ -5,52 +5,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from models import SearchMatch, SearchMode, SemanticSearchCandidate
-from normalization import normalize_query, tokenize
+from normalization import meaningful_tokens, normalize_query, tokenize
 from repositories.postgres import PostgresDictionaryRepository
 
 from .embeddings.base import EmbeddingProvider
 
 _SEMANTIC_ALLOWED_CHUNK_TYPES = frozenset({"title", "translation", "example"})
-_SEMANTIC_QUERY_STOPWORDS = frozenset(
-    {
-        "и",
-        "или",
-        "как",
-        "что",
-        "кто",
-        "где",
-        "куда",
-        "откуда",
-        "зачем",
-        "почему",
-        "ли",
-        "при",
-        "по",
-        "в",
-        "во",
-        "на",
-        "с",
-        "со",
-        "к",
-        "ко",
-        "у",
-        "о",
-        "об",
-        "про",
-        "для",
-        "из",
-        "а",
-        "но",
-        "же",
-        "это",
-        "этот",
-        "эта",
-        "эти",
-        "человек",
-        "человека",
-        "людей",
-    }
-)
+_SEMANTIC_EXTRA_STOPWORDS = frozenset({"человек", "человека", "людей"})
 _MAX_DISTANCE_WITHOUT_OVERLAP = 0.2
 _MAX_DISTANCE_DELTA_WITHOUT_OVERLAP = 0.015
 
@@ -138,13 +99,22 @@ class PgvectorSearchProvider:
             and self._overlap_count(query, candidate) > 0
         ]
         best_overlap_distance = min(overlap_distances) if overlap_distances else None
+        has_non_example_overlap = any(
+            candidate.chunk_type in {"title", "translation"}
+            and self._overlap_count(query, candidate) > 0
+            for candidate in candidates
+        )
 
         filtered: list[SemanticSearchCandidate] = []
         for candidate in candidates:
             if candidate.chunk_type not in _SEMANTIC_ALLOWED_CHUNK_TYPES:
                 continue
             overlap_count = self._overlap_count(query, candidate)
+            if candidate.chunk_type == "example" and has_non_example_overlap and overlap_count > 0:
+                continue
             if overlap_count == 0 and meaningful_tokens:
+                if best_overlap_distance is not None:
+                    continue
                 if candidate.chunk_type == "example":
                     continue
                 if candidate.distance > _MAX_DISTANCE_WITHOUT_OVERLAP:
@@ -160,11 +130,7 @@ class PgvectorSearchProvider:
 
     @staticmethod
     def _meaningful_query_tokens(query: str) -> tuple[str, ...]:
-        return tuple(
-            token
-            for token in tokenize(query)
-            if len(token) > 2 and token not in _SEMANTIC_QUERY_STOPWORDS
-        )
+        return meaningful_tokens(query, stopwords=_SEMANTIC_EXTRA_STOPWORDS)
 
     def _overlap_count(self, query: str, candidate: SemanticSearchCandidate) -> int:
         query_tokens = set(self._meaningful_query_tokens(query))

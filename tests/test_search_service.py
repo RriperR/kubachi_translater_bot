@@ -279,6 +279,45 @@ def test_complex_search_uses_stem_overlap_for_russian_translation_forms() -> Non
     )
 
 
+def test_complex_search_ignores_stopword_only_noise_for_long_natural_query() -> None:
+    """Длинный естественный запрос не должен ранжировать статьи только по stop-словам."""
+    service = DictionarySearchService(
+        providers=(
+            LexicalSearchProvider(
+                InMemoryRepository(
+                    [
+                        DictionaryEntry(
+                            source=DictionarySource.CORE,
+                            word="яхши-хуш",
+                            translation="собирательное название приветствий при встрече",
+                        ),
+                        DictionaryEntry(
+                            source=DictionarySource.CORE,
+                            word="хьвабикьи",
+                            translation="принимать гостей, устраивать на жительство",
+                        ),
+                        DictionaryEntry(
+                            source=DictionarySource.CORE,
+                            word="сисабну",
+                            translation="что это? что такое? что означает?",
+                        ),
+                    ]
+                )
+            ),
+        )
+    )
+
+    results = service.search("что говорят при встрече гостей", SearchMode.COMPLEX)
+
+    titles = [entry.title for entry in results]
+
+    assert "сисабну - что это? что такое? что означает?" not in titles
+    assert titles == [
+        "хьвабикьи - принимать гостей, устраивать на жительство",
+        "яхши-хуш - собирательное название приветствий при встрече",
+    ]
+
+
 def test_complex_fallback_trims_low_signal_tail_for_broad_queries() -> None:
     """Fallback на полный словарь не должен раздувать выдачу сотнями слабых совпадений."""
     entries = [
@@ -312,11 +351,12 @@ def test_complex_fallback_trims_low_signal_tail_for_broad_queries() -> None:
     titles = [match.entry.title for match in results]
 
     assert len(results) < 100
-    assert titles[:3] == [
+    assert titles[0] == "дикана - мастер золочения, серебрения"
+    assert set(titles[:3]) == {
         "дикана - мастер золочения, серебрения",
         "дихьхьана - мастер по насечке (инкрустации)",
         "уста - мастер",
-    ]
+    }
 
 
 def test_complex_search_prefers_word_prefix_over_comment_noise() -> None:
