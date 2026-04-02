@@ -98,7 +98,6 @@ class DictionaryBotApp:
         self._router.message.register(self._handle_restart, Command("restart"))
         self._router.message.register(self._handle_help, Command("help"))
         self._router.message.register(self._handle_info, Command("info"))
-        self._router.message.register(self._handle_receive, Command("receive"))
         self._router.message.register(self._handle_chat_id, Command("chatid"))
         self._router.message.register(self._handle_getdb, Command("getdb"))
         self._router.message.register(self._handle_add_command, Command("add"))
@@ -143,17 +142,6 @@ class DictionaryBotApp:
     async def _handle_info(self, message: Message) -> None:
         await self._track_message(message, "/info")
         await message.answer(texts.INFO_TEXT)
-
-    async def _handle_receive(self, message: Message) -> None:
-        await self._track_message(message, "/receive")
-        await message.answer_document(
-            FSInputFile(self._main_csv_repository.path),
-            caption=texts.FILES_MAIN_TEXT,
-        )
-        await message.answer_document(
-            FSInputFile(self._user_csv_repository.path),
-            caption=texts.FILES_USER_TEXT,
-        )
 
     async def _handle_chat_id(self, message: Message) -> None:
         await message.answer(f"Ваш chat_id: {message.chat.id}")
