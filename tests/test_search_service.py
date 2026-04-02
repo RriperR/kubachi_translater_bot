@@ -63,6 +63,23 @@ class FuzzyFallbackRepository(InMemoryRepository):
         return []
 
 
+class BroadFallbackRepository(InMemoryRepository):
+    """Репозиторий, который форсирует complex fallback на полный словарь."""
+
+    def search_entries(self, query: str, mode: SearchMode) -> list[DictionaryEntry]:
+        """Вернуть пустой SQL-результат, чтобы провайдер ранжировал полный словарь.
+
+        Args:
+            query: Поисковый запрос пользователя.
+            mode: Режим поиска.
+
+        Returns:
+            Пустой список, запускающий fallback в Python.
+        """
+        assert mode == SearchMode.COMPLEX
+        return []
+
+
 class StaticSearchProvider:
     """Поисковый провайдер с заранее заданными результатами."""
 
@@ -260,6 +277,46 @@ def test_complex_search_uses_stem_overlap_for_russian_translation_forms() -> Non
     assert titles.index("дикана - мастер золочения, серебрения") < titles.index(
         "дихьхьана - мастер по насечке (инкрустации)"
     )
+
+
+def test_complex_fallback_trims_low_signal_tail_for_broad_queries() -> None:
+    """Fallback на полный словарь не должен раздувать выдачу сотнями слабых совпадений."""
+    entries = [
+        DictionaryEntry(
+            source=DictionarySource.CORE,
+            word="дикана",
+            translation="мастер золочения, серебрения",
+        ),
+        DictionaryEntry(
+            source=DictionarySource.CORE,
+            word="уста",
+            translation="мастер",
+        ),
+        DictionaryEntry(
+            source=DictionarySource.CORE,
+            word="дихьхьана",
+            translation="мастер по насечке (инкрустации)",
+        ),
+    ]
+    entries.extend(
+        DictionaryEntry(
+            source=DictionarySource.CORE,
+            word=f"шум-{index}",
+            translation="по привычке",
+        )
+        for index in range(150)
+    )
+    provider = LexicalSearchProvider(BroadFallbackRepository(entries))
+
+    results = provider.search("мастер по серебру", SearchMode.COMPLEX)
+    titles = [match.entry.title for match in results]
+
+    assert len(results) < 100
+    assert titles[:3] == [
+        "дикана - мастер золочения, серебрения",
+        "дихьхьана - мастер по насечке (инкрустации)",
+        "уста - мастер",
+    ]
 
 
 def test_complex_search_prefers_word_prefix_over_comment_noise() -> None:

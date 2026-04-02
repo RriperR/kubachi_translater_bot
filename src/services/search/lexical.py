@@ -113,23 +113,26 @@ class LexicalSearchProvider:
             Список найденных совпадений с оценкой релевантности.
         """
         normalized_query = normalize_query(query)
+        entries, used_repository_fallback = self._load_entries(query, mode)
         matches: list[SearchMatch] = []
 
-        for entry in self._load_entries(query, mode):
+        for entry in entries:
             score = self._match_score(entry, normalized_query, mode)
             if score > 0:
                 matches.append(SearchMatch(entry=entry, score=score, origin="lexical"))
 
+        if used_repository_fallback and mode == SearchMode.COMPLEX:
+            return self._filter_complex_fallback_matches(matches)
         return matches
 
-    def _load_entries(self, query: str, mode: SearchMode) -> list[DictionaryEntry]:
+    def _load_entries(self, query: str, mode: SearchMode) -> tuple[list[DictionaryEntry], bool]:
         if isinstance(self._repository, CandidateEntryRepository):
             entries = self._repository.search_entries(query, mode)
             normalized_query = normalize_query(query)
             if entries or not self._supports_repository_fallback(normalized_query, mode):
-                return entries
-            return self._repository.list_entries()
-        return self._repository.list_entries()
+                return entries, False
+            return self._repository.list_entries(), True
+        return self._repository.list_entries(), False
 
     def _match_score(self, entry: DictionaryEntry, query: str, mode: SearchMode) -> int:
         if not query:
@@ -277,6 +280,17 @@ class LexicalSearchProvider:
         if mode != SearchMode.COMPLEX:
             return False
         return len(cls._meaningful_query_stems(query)) >= 2
+
+    @staticmethod
+    def _filter_complex_fallback_matches(matches: list[SearchMatch]) -> list[SearchMatch]:
+        if not matches:
+            return []
+
+        sorted_matches = sorted(matches, key=lambda item: item.score, reverse=True)
+        best_score = sorted_matches[0].score
+        threshold = max(50, best_score // 4)
+        filtered_matches = [match for match in sorted_matches if match.score >= threshold]
+        return filtered_matches[:80]
 
     @classmethod
     def _fuzzy_score(
