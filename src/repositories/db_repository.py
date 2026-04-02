@@ -208,6 +208,60 @@ class PostgresRepository:
                     USING GIN (to_tsvector('simple', normalized_search_text))
                     """
                 )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS dictionary_entry_chunks (
+                        id BIGSERIAL PRIMARY KEY,
+                        entry_id BIGINT NOT NULL
+                            REFERENCES dictionary_entries(id) ON DELETE CASCADE,
+                        source TEXT NOT NULL CHECK (source IN ('core', 'user')),
+                        chunk_type TEXT NOT NULL CHECK (
+                            chunk_type IN ('title', 'translation', 'example', 'note', 'comment')
+                        ),
+                        chunk_order INTEGER NOT NULL DEFAULT 0,
+                        chunk_text TEXT NOT NULL,
+                        normalized_chunk_text TEXT NOT NULL DEFAULT '',
+                        UNIQUE (entry_id, chunk_type, chunk_order)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_chunks_entry
+                    ON dictionary_entry_chunks(entry_id)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_chunks_source_type
+                    ON dictionary_entry_chunks(source, chunk_type)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_chunks_search_vector
+                    ON dictionary_entry_chunks
+                    USING GIN (to_tsvector('simple', normalized_chunk_text))
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS dictionary_chunk_embeddings (
+                        chunk_id BIGINT PRIMARY KEY
+                            REFERENCES dictionary_entry_chunks(id) ON DELETE CASCADE,
+                        embedding_provider TEXT,
+                        embedding_model TEXT,
+                        embedding_version TEXT NOT NULL DEFAULT '',
+                        vector_dimensions INTEGER,
+                        embedding_status TEXT NOT NULL DEFAULT 'pending' CHECK (
+                            embedding_status IN ('pending', 'ready', 'error')
+                        ),
+                        content_hash TEXT NOT NULL DEFAULT '',
+                        last_indexed_at TIMESTAMPTZ,
+                        last_error TEXT NOT NULL DEFAULT ''
+                    )
+                    """
+                )
             connection.commit()
 
     def ensure_user(self, user: TelegramUser) -> None:

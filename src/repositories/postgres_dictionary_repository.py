@@ -83,6 +83,40 @@ class PostgresDictionaryRepository:
 
         return [self._row_to_entry(row) for row in rows]
 
+    def sync_rag_chunks(self) -> int:
+        """Синхронизировать RAG-чанки со словарными статьями текущего источника.
+
+        Returns:
+            Количество сохраненных чанков после полной синхронизации источника.
+        """
+        with self._connect() as connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        source,
+                        word,
+                        translation,
+                        examples,
+                        notes,
+                        comments
+                    FROM dictionary_entries
+                    WHERE source = %s
+                    ORDER BY id
+                    """,
+                    (self._source.value,),
+                )
+                rows = cursor.fetchall()
+
+            with connection.cursor() as cursor:
+                total_chunks = 0
+                for row in rows:
+                    total_chunks += self._sync_rag_chunks_for_row(cursor, row)
+            connection.commit()
+
+        return total_chunks
+
     def import_entries(self, entries: Iterable[DictionaryEntry]) -> int:
         """Импортировать словарные статьи в PostgreSQL.
 
@@ -125,6 +159,7 @@ class PostgresDictionaryRepository:
                     )
                     inserted += cursor.rowcount
             connection.commit()
+        self.sync_rag_chunks()
         return inserted
 
     def list_entries(self) -> list[DictionaryEntry]:
@@ -174,7 +209,7 @@ class PostgresDictionaryRepository:
             )
 
         with self._connect() as connection:
-            with connection.cursor() as cursor:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     INSERT INTO dictionary_entries (
@@ -194,6 +229,14 @@ class PostgresDictionaryRepository:
                         banner
                     )
                     VALUES (%s, %s, %s, %s, %s, '', %s, %s, '', %s, %s, %s, %s, %s)
+                    RETURNING
+                        id,
+                        source,
+                        word,
+                        translation,
+                        examples,
+                        notes,
+                        comments
                     """,
                     (
                         self._source.value,
@@ -216,6 +259,9 @@ class PostgresDictionaryRepository:
                         "!!!ПОЛЬЗОВАТЕЛЬСКИЙ ПЕРЕВОД!!!",
                     ),
                 )
+                inserted_row = cursor.fetchone()
+                if inserted_row is not None:
+                    self._sync_rag_chunks_for_row(cursor, inserted_row)
             connection.commit()
 
     def append_comment(self, title: str, comment: str, author: TelegramUser) -> bool:
@@ -236,7 +282,7 @@ class PostgresDictionaryRepository:
             comment_line += f" ({author.first_name})"
 
         with self._connect() as connection:
-            with connection.cursor() as cursor:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     r"""
                     UPDATE dictionary_entries
@@ -297,6 +343,14 @@ class PostgresDictionaryRepository:
                         )
                     WHERE source = %s
                       AND CONCAT(word, ' - ', translation) = %s
+                    RETURNING
+                        id,
+                        source,
+                        word,
+                        translation,
+                        examples,
+                        notes,
+                        comments
                     """,
                     (
                         comment_line,
@@ -309,7 +363,10 @@ class PostgresDictionaryRepository:
                         title,
                     ),
                 )
-                updated = int(cursor.rowcount) > 0
+                updated_row = cursor.fetchone()
+                updated = updated_row is not None
+                if updated_row is not None:
+                    self._sync_rag_chunks_for_row(cursor, updated_row)
             connection.commit()
         return updated
 
@@ -407,6 +464,99 @@ class PostgresDictionaryRepository:
             entry.contributor_last_name,
             entry.banner,
         )
+
+    def _sync_rag_chunks_for_row(self, cursor: Any, row: dict[str, Any]) -> int:
+        entry_id = int(row["id"])
+        chunks = self._build_rag_chunks(row)
+
+        cursor.execute("DELETE FROM dictionary_entry_chunks WHERE entry_id = %s", (entry_id,))
+        if not chunks:
+            return 0
+
+        cursor.executemany(
+            """
+            INSERT INTO dictionary_entry_chunks (
+                entry_id,
+                source,
+                chunk_type,
+                chunk_order,
+                chunk_text,
+                normalized_chunk_text
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            chunks,
+        )
+        cursor.execute(
+            """
+            INSERT INTO dictionary_chunk_embeddings (
+                chunk_id,
+                embedding_status,
+                content_hash
+            )
+            SELECT
+                id,
+                'pending',
+                md5(normalized_chunk_text)
+            FROM dictionary_entry_chunks
+            WHERE entry_id = %s
+            ON CONFLICT (chunk_id) DO UPDATE
+            SET content_hash = EXCLUDED.content_hash,
+                embedding_status = CASE
+                    WHEN dictionary_chunk_embeddings.content_hash = EXCLUDED.content_hash
+                        THEN dictionary_chunk_embeddings.embedding_status
+                    ELSE 'pending'
+                END,
+                last_error = CASE
+                    WHEN dictionary_chunk_embeddings.content_hash = EXCLUDED.content_hash
+                        THEN dictionary_chunk_embeddings.last_error
+                    ELSE ''
+                END
+            """,
+            (entry_id,),
+        )
+        return len(chunks)
+
+    def _build_rag_chunks(self, row: dict[str, Any]) -> list[tuple[object, ...]]:
+        source = str(row["source"]).strip()
+        entry_id = int(row["id"])
+        word = str(row["word"]).strip()
+        translation = str(row["translation"]).strip()
+        examples = tuple(row.get("examples") or ())
+        notes = tuple(row.get("notes") or ())
+        comment_lines = compact_lines(str(row.get("comments") or "").splitlines())
+
+        raw_chunks: list[tuple[str, int, str]] = [
+            ("title", 0, f"{word} - {translation}"),
+            ("translation", 0, translation),
+        ]
+        raw_chunks.extend(
+            ("example", index, example.strip())
+            for index, example in enumerate(examples)
+            if example and example.strip()
+        )
+        raw_chunks.extend(
+            ("note", index, note.strip())
+            for index, note in enumerate(notes)
+            if note and note.strip()
+        )
+        raw_chunks.extend(
+            ("comment", index, comment.strip())
+            for index, comment in enumerate(comment_lines)
+            if comment and comment.strip()
+        )
+
+        return [
+            (
+                entry_id,
+                source,
+                chunk_type,
+                chunk_order,
+                chunk_text,
+                self._normalize_token_text(chunk_text),
+            )
+            for chunk_type, chunk_order, chunk_text in raw_chunks
+        ]
 
     @staticmethod
     def _build_search_text(
