@@ -140,7 +140,7 @@ make index-rag
 make benchmark-retrieval
 ```
 
-The target runs against the local Postgres container published on `localhost:5434`, so keep `docker compose up -d db bot` running.
+Команда ходит в локальный Postgres-контейнер через `localhost:5434`, поэтому перед запуском держи поднятым хотя бы `docker compose up -d db`.
 
 Можно передать свои параметры через `ARGS`, например:
 
@@ -149,6 +149,18 @@ make benchmark-retrieval ARGS="--top-k 10 --repeat 10 --output benchmarks/result
 ```
 
 Набор кейсов лежит в [benchmarks/retrieval_cases.json](benchmarks/retrieval_cases.json). Скрипт выводит summary по quality-метрикам и latency, а при `--output` сохраняет подробный JSON-отчет.
+
+## Интеграционные тесты
+
+Интеграционные тесты гоняются по живому `docker compose`-стеку и по умолчанию пропускаются в обычном `make project-check`.
+
+Запуск:
+
+```bash
+make test-integration
+```
+
+Команда сама поднимает `db`, применяет Alembic-миграции и гоняет `pytest --integration` против живого Postgres/pgvector на `localhost:5434`.
 
 ## Docker
 

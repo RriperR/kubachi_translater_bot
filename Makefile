@@ -1,5 +1,5 @@
 .PHONY: install install-lint install-test install-all \
-	lint doclint lint-fix format format-check type-check test test-critical test-with-coverage project-check run import-dictionary index-rag benchmark-retrieval db-upgrade db-downgrade db-current db-revision
+	lint doclint lint-fix format format-check type-check test test-integration test-critical test-with-coverage project-check run import-dictionary index-rag benchmark-retrieval db-upgrade db-downgrade db-current db-revision
 
 install:
 	uv sync
@@ -34,6 +34,9 @@ type-check:
 
 test:
 	uv run pytest -p no:cacheprovider $(ARGS)
+
+test-integration:
+	uv run pytest -p no:cacheprovider --integration tests/integration $(ARGS)
 
 test-critical:
 	uv run pytest -m critical -q -p no:cacheprovider $(ARGS)
