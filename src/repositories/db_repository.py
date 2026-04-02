@@ -79,12 +79,103 @@ class PostgresRepository:
                         normalized_translation TEXT NOT NULL DEFAULT '',
                         normalized_comments TEXT NOT NULL DEFAULT '',
                         normalized_search_text TEXT NOT NULL DEFAULT '',
+                        contributor_id BIGINT,
                         contributor_username TEXT,
                         contributor_first_name TEXT,
                         contributor_last_name TEXT,
                         banner TEXT,
                         UNIQUE (source, word, translation)
                     )
+                    """
+                )
+                cursor.execute(
+                    """
+                    ALTER TABLE dictionary_entries
+                    ADD COLUMN IF NOT EXISTS contributor_id BIGINT
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS dictionary_contributors (
+                        id BIGSERIAL PRIMARY KEY,
+                        chat_id BIGINT,
+                        username TEXT,
+                        first_name TEXT NOT NULL DEFAULT '',
+                        last_name TEXT NOT NULL DEFAULT '',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_dictionary_contributors_chat_id
+                    ON dictionary_contributors(chat_id)
+                    WHERE chat_id IS NOT NULL
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS dictionary_entry_examples (
+                        id BIGSERIAL PRIMARY KEY,
+                        entry_id BIGINT NOT NULL
+                            REFERENCES dictionary_entries(id) ON DELETE CASCADE,
+                        position INTEGER NOT NULL,
+                        text TEXT NOT NULL,
+                        normalized_text TEXT NOT NULL DEFAULT '',
+                        UNIQUE (entry_id, position)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_examples_entry
+                    ON dictionary_entry_examples(entry_id)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS dictionary_entry_notes (
+                        id BIGSERIAL PRIMARY KEY,
+                        entry_id BIGINT NOT NULL
+                            REFERENCES dictionary_entries(id) ON DELETE CASCADE,
+                        position INTEGER NOT NULL,
+                        text TEXT NOT NULL,
+                        normalized_text TEXT NOT NULL DEFAULT '',
+                        UNIQUE (entry_id, position)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_notes_entry
+                    ON dictionary_entry_notes(entry_id)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS dictionary_entry_comments (
+                        id BIGSERIAL PRIMARY KEY,
+                        entry_id BIGINT NOT NULL
+                            REFERENCES dictionary_entries(id) ON DELETE CASCADE,
+                        contributor_id BIGINT REFERENCES dictionary_contributors(id)
+                            ON DELETE SET NULL,
+                        text TEXT NOT NULL,
+                        normalized_text TEXT NOT NULL DEFAULT '',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_comments_entry
+                    ON dictionary_entry_comments(entry_id)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_comments_contributor
+                    ON dictionary_entry_comments(contributor_id)
                     """
                 )
                 cursor.execute(
@@ -206,6 +297,12 @@ class PostgresRepository:
                     CREATE INDEX IF NOT EXISTS idx_dictionary_entries_search_vector
                     ON dictionary_entries
                     USING GIN (to_tsvector('simple', normalized_search_text))
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dictionary_entries_contributor
+                    ON dictionary_entries(contributor_id)
                     """
                 )
                 cursor.execute(
