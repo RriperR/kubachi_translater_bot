@@ -5,7 +5,45 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from models import DictionaryEntry, DictionarySource, SearchMatch, SearchMode
-from normalization import comma_values, normalize_query, tokenize
+from normalization import comma_values, normalize_query, stem_tokens, tokenize
+
+_QUERY_STOPWORDS = frozenset(
+    {
+        "и",
+        "или",
+        "как",
+        "что",
+        "кто",
+        "где",
+        "куда",
+        "откуда",
+        "зачем",
+        "почему",
+        "ли",
+        "при",
+        "по",
+        "в",
+        "во",
+        "на",
+        "с",
+        "со",
+        "к",
+        "ко",
+        "у",
+        "о",
+        "об",
+        "про",
+        "для",
+        "из",
+        "а",
+        "но",
+        "же",
+        "это",
+        "этот",
+        "эта",
+        "эти",
+    }
+)
 
 
 class EntryRepository(Protocol):
@@ -87,7 +125,8 @@ class LexicalSearchProvider:
     def _load_entries(self, query: str, mode: SearchMode) -> list[DictionaryEntry]:
         if isinstance(self._repository, CandidateEntryRepository):
             entries = self._repository.search_entries(query, mode)
-            if entries or not self._supports_fuzzy_fallback(normalize_query(query)):
+            normalized_query = normalize_query(query)
+            if entries or not self._supports_repository_fallback(normalized_query, mode):
                 return entries
             return self._repository.list_entries()
         return self._repository.list_entries()
@@ -128,6 +167,7 @@ class LexicalSearchProvider:
         query_tokens = tokenize(query)
         if not query_tokens:
             return 0
+        query_stems = self._meaningful_query_stems(query)
 
         normalized_title = normalize_query(entry.title)
         word_candidates = comma_values(entry.word)
@@ -136,6 +176,11 @@ class LexicalSearchProvider:
         example_tokens = tokenize(" ".join(entry.examples))
         note_tokens = tokenize(" ".join(entry.notes))
         comment_tokens = tokenize(entry.comments)
+        title_stems = stem_tokens(entry.title)
+        translation_stems = stem_tokens(entry.translation)
+        example_stems = stem_tokens(" ".join(entry.examples))
+        note_stems = stem_tokens(" ".join(entry.notes))
+        comment_stems = stem_tokens(entry.comments)
 
         score = 0
         if normalized_title == query:
@@ -171,6 +216,19 @@ class LexicalSearchProvider:
                 score += coverage_weight
 
             score += token_weight * self._matching_token_count(tokens, query_tokens)
+
+        if query_stems:
+            stem_weighted_tokens = (
+                (translation_stems, 95, 32),
+                (title_stems, 70, 24),
+                (example_stems, 24, 8),
+                (note_stems, 18, 5),
+                (comment_stems, 12, 3),
+            )
+            for tokens, coverage_weight, token_weight in stem_weighted_tokens:
+                if self._has_stem_coverage(tokens, query_stems):
+                    score += coverage_weight
+                score += token_weight * self._matching_stem_count(tokens, query_stems)
 
         return score
 
@@ -211,6 +269,14 @@ class LexicalSearchProvider:
     def _supports_fuzzy_fallback(query: str) -> bool:
         query_tokens = tokenize(query)
         return len(query_tokens) == 1 and len(query_tokens[0]) >= 4
+
+    @classmethod
+    def _supports_repository_fallback(cls, query: str, mode: SearchMode) -> bool:
+        if cls._supports_fuzzy_fallback(query):
+            return True
+        if mode != SearchMode.COMPLEX:
+            return False
+        return len(cls._meaningful_query_stems(query)) >= 2
 
     @classmethod
     def _fuzzy_score(
@@ -262,3 +328,23 @@ class LexicalSearchProvider:
         if distance > max_distance:
             return None
         return distance
+
+    @staticmethod
+    def _meaningful_query_stems(query: str) -> tuple[str, ...]:
+        return tuple(
+            stem for stem in stem_tokens(query) if len(stem) > 2 and stem not in _QUERY_STOPWORDS
+        )
+
+    @staticmethod
+    def _has_stem_coverage(tokens: tuple[str, ...], query_stems: tuple[str, ...]) -> bool:
+        if not tokens or not query_stems:
+            return False
+        token_pool = set(tokens)
+        return all(stem in token_pool for stem in query_stems)
+
+    @staticmethod
+    def _matching_stem_count(tokens: tuple[str, ...], query_stems: tuple[str, ...]) -> int:
+        if not tokens or not query_stems:
+            return 0
+        query_pool = set(query_stems)
+        return sum(1 for token in tokens if token in query_pool)

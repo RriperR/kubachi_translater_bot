@@ -223,6 +223,45 @@ def test_complex_search_finds_example_match() -> None:
     assert [entry.title for entry in results] == ["аIа - дом"]
 
 
+def test_complex_search_uses_stem_overlap_for_russian_translation_forms() -> None:
+    """Словоформы в русском переводе должны поднимать более релевантное ремесло выше."""
+    service = DictionarySearchService(
+        providers=(
+            LexicalSearchProvider(
+                InMemoryRepository(
+                    [
+                        DictionaryEntry(
+                            source=DictionarySource.CORE,
+                            word="дикана",
+                            translation="мастер золочения, серебрения",
+                        ),
+                        DictionaryEntry(
+                            source=DictionarySource.CORE,
+                            word="уста",
+                            translation="мастер",
+                        ),
+                        DictionaryEntry(
+                            source=DictionarySource.CORE,
+                            word="дихьхьана",
+                            translation="мастер по насечке (инкрустации)",
+                        ),
+                    ]
+                )
+            ),
+        )
+    )
+
+    results = service.search("мастер по серебру", SearchMode.COMPLEX)
+
+    titles = [entry.title for entry in results]
+
+    assert titles[0] == "дикана - мастер золочения, серебрения"
+    assert "уста - мастер" in titles
+    assert titles.index("дикана - мастер золочения, серебрения") < titles.index(
+        "дихьхьана - мастер по насечке (инкрустации)"
+    )
+
+
 def test_complex_search_prefers_word_prefix_over_comment_noise() -> None:
     """Комплексный режим должен поднимать префикс слова выше шумных совпадений в комментариях."""
     service = DictionarySearchService(

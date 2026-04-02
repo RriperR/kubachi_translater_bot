@@ -27,6 +27,63 @@ _WORD_TRANSLATION = str.maketrans(
 
 _PUNCTUATION_RE = re.compile(r"[(){}\[\],.;:!?\"'«»]+")
 _MULTISPACE_RE = re.compile(r"\s+")
+_CYRILLIC_TOKEN_RE = re.compile(r"[а-яё-]+")
+_RUSSIAN_STEM_SUFFIXES = (
+    "ениями",
+    "аниями",
+    "иями",
+    "ями",
+    "ами",
+    "ениях",
+    "аниях",
+    "иях",
+    "ах",
+    "ях",
+    "ением",
+    "анием",
+    "ения",
+    "ания",
+    "ению",
+    "анию",
+    "ение",
+    "аний",
+    "ений",
+    "остью",
+    "ости",
+    "ость",
+    "ыми",
+    "ими",
+    "ого",
+    "его",
+    "ому",
+    "ему",
+    "ый",
+    "ий",
+    "ой",
+    "ая",
+    "яя",
+    "ое",
+    "ее",
+    "ые",
+    "ие",
+    "ую",
+    "юю",
+    "ом",
+    "ем",
+    "ам",
+    "ям",
+    "ов",
+    "ев",
+    "у",
+    "ю",
+    "а",
+    "я",
+    "ы",
+    "и",
+    "е",
+    "о",
+    "ь",
+)
 
 
 def normalize_query(text: str) -> str:
@@ -66,6 +123,41 @@ def tokenize(text: str) -> tuple[str, ...]:
     normalized = normalize_query(text)
     cleaned = _PUNCTUATION_RE.sub(" ", normalized)
     return tuple(part for part in cleaned.split() if part)
+
+
+def russian_stem(token: str) -> str:
+    """Получить упрощенную основу русского токена для поиска по словоформам.
+
+    Args:
+        token: Нормализованный или произвольный токен.
+
+    Returns:
+        Укороченная основа русского слова. Для некириллических токенов
+        возвращается нормализованное исходное значение.
+    """
+    normalized = normalize_query(token)
+    if not normalized or _CYRILLIC_TOKEN_RE.fullmatch(normalized) is None:
+        return normalized
+
+    for suffix in _RUSSIAN_STEM_SUFFIXES:
+        if not normalized.endswith(suffix):
+            continue
+        stem = normalized[: -len(suffix)]
+        if len(stem) >= 4:
+            return stem
+    return normalized
+
+
+def stem_tokens(text: str) -> tuple[str, ...]:
+    """Разбить строку на токены и привести русские слова к упрощенным основам.
+
+    Args:
+        text: Исходный текст для токенизации.
+
+    Returns:
+        Кортеж stem-токенов без пустых значений.
+    """
+    return tuple(stem for stem in (russian_stem(token) for token in tokenize(text)) if stem)
 
 
 def split_values(text: str, separator: str) -> tuple[str, ...]:
