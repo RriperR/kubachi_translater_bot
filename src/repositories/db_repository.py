@@ -315,11 +315,18 @@ class PostgresRepository:
                         chunk_type TEXT NOT NULL CHECK (
                             chunk_type IN ('title', 'translation', 'example', 'note', 'comment')
                         ),
+                        source_row_id BIGINT,
                         chunk_order INTEGER NOT NULL DEFAULT 0,
                         chunk_text TEXT NOT NULL,
                         normalized_chunk_text TEXT NOT NULL DEFAULT '',
                         UNIQUE (entry_id, chunk_type, chunk_order)
                     )
+                    """
+                )
+                cursor.execute(
+                    """
+                    ALTER TABLE dictionary_entry_chunks
+                    ADD COLUMN IF NOT EXISTS source_row_id BIGINT
                     """
                 )
                 cursor.execute(
