@@ -11,8 +11,8 @@ from time import perf_counter
 from typing import Any, Protocol
 
 from config import AppConfig
-from models import RagChunkRecord, SearchMatch, SearchMode
-from normalization import tokenize
+from models import RagChunkRecord, SearchMatch, SearchMode, SemanticSearchCandidate
+from normalization import normalize_query, tokenize
 from repositories.postgres_dictionary_repository import PostgresDictionaryRepository
 
 _HASH_EMBEDDING_PROVIDER = "local"
@@ -20,6 +20,49 @@ _HASH_EMBEDDING_MODEL = "hash-embedding"
 _HASH_EMBEDDING_VERSION = "v1"
 _SENTENCE_TRANSFORMER_PROVIDER = "sentence-transformers"
 _SENTENCE_TRANSFORMER_VERSION = "v1"
+_SEMANTIC_ALLOWED_CHUNK_TYPES = frozenset({"title", "translation", "example"})
+_SEMANTIC_QUERY_STOPWORDS = frozenset(
+    {
+        "и",
+        "или",
+        "как",
+        "что",
+        "кто",
+        "где",
+        "куда",
+        "откуда",
+        "зачем",
+        "почему",
+        "ли",
+        "при",
+        "по",
+        "в",
+        "во",
+        "на",
+        "с",
+        "со",
+        "к",
+        "ко",
+        "у",
+        "о",
+        "об",
+        "про",
+        "для",
+        "из",
+        "а",
+        "но",
+        "же",
+        "это",
+        "этот",
+        "эта",
+        "эти",
+        "человек",
+        "человека",
+        "людей",
+    }
+)
+_MAX_DISTANCE_WITHOUT_OVERLAP = 0.2
+_MAX_DISTANCE_DELTA_WITHOUT_OVERLAP = 0.015
 
 logger = logging.getLogger(__name__)
 
@@ -455,25 +498,83 @@ class PgvectorSearchProvider:
             version=self._embedding_provider.version,
             dimensions=self._embedding_provider.dimensions,
         )
+        filtered_candidates = self._filter_candidates(query, candidates)
 
         matches: list[SearchMatch] = []
-        for candidate in candidates:
+        for candidate in filtered_candidates:
             if candidate.distance > self._max_distance:
                 continue
-            score = self._semantic_score(candidate.distance, candidate.chunk_type)
+            overlap_count = self._overlap_count(query, candidate)
+            score = self._semantic_score(candidate.distance, candidate.chunk_type, overlap_count)
             if score <= 0:
                 continue
             matches.append(SearchMatch(entry=candidate.entry, score=score))
         return matches
 
     @staticmethod
-    def _semantic_score(distance: float, chunk_type: str) -> int:
+    def _semantic_score(distance: float, chunk_type: str, overlap_count: int) -> int:
         chunk_bonus = {
-            "title": 35,
-            "translation": 28,
-            "example": 16,
-            "note": 12,
-            "comment": 8,
+            "title": 18,
+            "translation": 24,
+            "example": 14,
         }.get(chunk_type, 0)
         similarity = max(0.0, 1.0 - distance)
-        return int(similarity * 70) + chunk_bonus
+        overlap_bonus = min(overlap_count, 3) * 22
+        no_overlap_penalty = 24 if overlap_count == 0 else 0
+        return int(similarity * 85) + chunk_bonus + overlap_bonus - no_overlap_penalty
+
+    def _filter_candidates(
+        self,
+        query: str,
+        candidates: Sequence[SemanticSearchCandidate],
+    ) -> list[SemanticSearchCandidate]:
+        meaningful_tokens = self._meaningful_query_tokens(query)
+        overlap_distances = [
+            candidate.distance
+            for candidate in candidates
+            if candidate.chunk_type in _SEMANTIC_ALLOWED_CHUNK_TYPES
+            and self._overlap_count(query, candidate) > 0
+        ]
+        best_overlap_distance = min(overlap_distances) if overlap_distances else None
+
+        filtered: list[SemanticSearchCandidate] = []
+        for candidate in candidates:
+            if candidate.chunk_type not in _SEMANTIC_ALLOWED_CHUNK_TYPES:
+                continue
+            overlap_count = self._overlap_count(query, candidate)
+            if overlap_count == 0 and meaningful_tokens:
+                if candidate.chunk_type == "example":
+                    continue
+                if candidate.distance > _MAX_DISTANCE_WITHOUT_OVERLAP:
+                    continue
+                if (
+                    best_overlap_distance is not None
+                    and candidate.distance
+                    > best_overlap_distance + _MAX_DISTANCE_DELTA_WITHOUT_OVERLAP
+                ):
+                    continue
+            filtered.append(candidate)
+        return filtered
+
+    @staticmethod
+    def _meaningful_query_tokens(query: str) -> tuple[str, ...]:
+        return tuple(
+            token
+            for token in tokenize(query)
+            if len(token) > 2 and token not in _SEMANTIC_QUERY_STOPWORDS
+        )
+
+    def _overlap_count(self, query: str, candidate: SemanticSearchCandidate) -> int:
+        query_tokens = set(self._meaningful_query_tokens(query))
+        if not query_tokens:
+            return 0
+
+        candidate_text = " ".join(
+            (
+                candidate.entry.word,
+                candidate.entry.translation,
+                candidate.chunk_text,
+            )
+        )
+        candidate_tokens = set(tokenize(normalize_query(candidate_text)))
+        return len(query_tokens & candidate_tokens)

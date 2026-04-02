@@ -275,6 +275,123 @@ def test_pgvector_search_provider_filters_far_candidates() -> None:
     assert provider.search("приветствие", SearchMode.COMPLEX) == []
 
 
+def test_pgvector_search_provider_skips_noise_from_notes_and_comments() -> None:
+    """Семантический поиск не должен возвращать note/comment-чанки как итоговую выдачу."""
+    provider = PgvectorSearchProvider(
+        repository=SemanticRepositoryStub(
+            [
+                SemanticSearchCandidate(
+                    entry=DictionaryEntry(
+                        source=DictionarySource.CORE,
+                        word="уста",
+                        translation="мастер",
+                    ),
+                    chunk_id=1,
+                    chunk_type="note",
+                    chunk_text="сов. устухи.",
+                    distance=0.12,
+                ),
+                SemanticSearchCandidate(
+                    entry=DictionaryEntry(
+                        source=DictionarySource.CORE,
+                        word="дихьхьана",
+                        translation="мастер по насечке",
+                    ),
+                    chunk_id=2,
+                    chunk_type="translation",
+                    chunk_text="мастер по насечке",
+                    distance=0.15,
+                ),
+            ]
+        ),
+        embedding_provider=HashEmbeddingProvider(dimensions=32),
+        top_k=3,
+        max_distance=0.65,
+    )
+
+    matches = provider.search("мастер по серебру", SearchMode.COMPLEX)
+
+    assert [match.entry.title for match in matches] == ["дихьхьана - мастер по насечке"]
+
+
+def test_pgvector_search_provider_filters_no_overlap_noise_when_overlap_exists() -> None:
+    """Семантический поиск должен отрезать далекие no-overlap кандидаты при наличии overlap."""
+    provider = PgvectorSearchProvider(
+        repository=SemanticRepositoryStub(
+            [
+                SemanticSearchCandidate(
+                    entry=DictionaryEntry(
+                        source=DictionarySource.CORE,
+                        word="хьайхъайвагъи",
+                        translation="поприветствовать",
+                    ),
+                    chunk_id=1,
+                    chunk_type="translation",
+                    chunk_text="поприветствовать",
+                    distance=0.17,
+                ),
+                SemanticSearchCandidate(
+                    entry=DictionaryEntry(
+                        source=DictionarySource.CORE,
+                        word="вачIадихь",
+                        translation="умильность, нежность",
+                    ),
+                    chunk_id=2,
+                    chunk_type="title",
+                    chunk_text="ВАЧIАДИХЬ - умильность, нежность",
+                    distance=0.214,
+                ),
+            ]
+        ),
+        embedding_provider=HashEmbeddingProvider(dimensions=32),
+        top_k=3,
+        max_distance=0.65,
+    )
+
+    matches = provider.search("как поприветствовать человека", SearchMode.COMPLEX)
+
+    assert [match.entry.title for match in matches] == ["хьайхъайвагъи - поприветствовать"]
+
+
+def test_pgvector_search_provider_requires_overlap_for_example_chunks() -> None:
+    """Семантические example-чанки без пересечения токенов должны отбрасываться как шум."""
+    provider = PgvectorSearchProvider(
+        repository=SemanticRepositoryStub(
+            [
+                SemanticSearchCandidate(
+                    entry=DictionaryEntry(
+                        source=DictionarySource.CORE,
+                        word="майур",
+                        translation="майор",
+                    ),
+                    chunk_id=1,
+                    chunk_type="example",
+                    chunk_text="майурра пагунте пагоны майора",
+                    distance=0.149,
+                ),
+                SemanticSearchCandidate(
+                    entry=DictionaryEntry(
+                        source=DictionarySource.CORE,
+                        word="дихьхьана",
+                        translation="мастер по насечке",
+                    ),
+                    chunk_id=2,
+                    chunk_type="translation",
+                    chunk_text="мастер по насечке",
+                    distance=0.146,
+                ),
+            ]
+        ),
+        embedding_provider=HashEmbeddingProvider(dimensions=32),
+        top_k=3,
+        max_distance=0.65,
+    )
+
+    matches = provider.search("мастер по серебру", SearchMode.COMPLEX)
+
+    assert [match.entry.title for match in matches] == ["дихьхьана - мастер по насечке"]
+
+
 def test_dictionary_rag_indexer_indexes_batches_with_progress_units() -> None:
     """Индексатор должен сохранять embeddings пакетно и отдельно учитывать ошибки."""
     repository = IndexRepositoryStub(
