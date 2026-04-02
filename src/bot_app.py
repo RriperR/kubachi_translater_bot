@@ -65,10 +65,7 @@ class DictionaryBotApp:
         self._dispatcher.include_router(self._router)
 
         self._session_store = SessionStore()
-        self._db_repository = PostgresRepository(
-            config.database,
-            rag_vector_dimensions=config.rag_embedding_dimensions,
-        )
+        self._db_repository = PostgresRepository(config.database)
         self._main_repository = PostgresDictionaryRepository(config.database, DictionarySource.CORE)
         self._user_repository = PostgresDictionaryRepository(config.database, DictionarySource.USER)
         self._embedding_provider = build_embedding_provider(config)
@@ -101,7 +98,7 @@ class DictionaryBotApp:
 
     async def run(self) -> None:
         """Подготовить зависимости и запустить polling Telegram-бота."""
-        await asyncio.to_thread(self._db_repository.ensure_schema)
+        await asyncio.to_thread(self._db_repository.require_schema)
         await asyncio.to_thread(self._main_repository.sync_rag_chunks)
         await asyncio.to_thread(self._user_repository.sync_rag_chunks)
         await self._dispatcher.start_polling(self._bot)

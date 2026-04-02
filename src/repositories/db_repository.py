@@ -17,15 +17,13 @@ from models import SearchMode, TelegramUser
 class PostgresRepository:
     """Репозиторий для работы с таблицами приложения в PostgreSQL."""
 
-    def __init__(self, config: DatabaseConfig, rag_vector_dimensions: int = 384) -> None:
+    def __init__(self, config: DatabaseConfig) -> None:
         """Сохранить параметры подключения к базе данных.
 
         Args:
             config: Настройки подключения к PostgreSQL.
-            rag_vector_dimensions: Размерность векторной колонки для pgvector.
         """
         self._config = config
-        self._rag_vector_dimensions = rag_vector_dimensions
 
     @contextmanager
     def _connect(self) -> Iterator[Any]:
@@ -41,313 +39,50 @@ class PostgresRepository:
         finally:
             connection.close()
 
-    def ensure_schema(self) -> None:
-        """Создать таблицы приложения, если база еще пустая."""
-        with self._connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS users (
-                        id BIGSERIAL PRIMARY KEY,
-                        username TEXT,
-                        firstname TEXT NOT NULL,
-                        lastname TEXT NOT NULL,
-                        chatid TEXT NOT NULL UNIQUE,
-                        mode TEXT NOT NULL DEFAULT 'lite'
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS actions (
-                        id BIGSERIAL PRIMARY KEY,
-                        action TEXT NOT NULL,
-                        date_time TEXT NOT NULL,
-                        fk_user BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS dictionary_entries (
-                        id BIGSERIAL PRIMARY KEY,
-                        source TEXT NOT NULL CHECK (source IN ('core', 'user')),
-                        word TEXT NOT NULL,
-                        translation TEXT NOT NULL,
-                        normalized_word TEXT NOT NULL DEFAULT '',
-                        normalized_translation TEXT NOT NULL DEFAULT '',
-                        contributor_id BIGINT,
-                        UNIQUE (source, word, translation)
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    ALTER TABLE dictionary_entries
-                    ADD COLUMN IF NOT EXISTS contributor_id BIGINT
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS dictionary_contributors (
-                        id BIGSERIAL PRIMARY KEY,
-                        chat_id BIGINT,
-                        username TEXT,
-                        first_name TEXT NOT NULL DEFAULT '',
-                        last_name TEXT NOT NULL DEFAULT '',
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_dictionary_contributors_chat_id
-                    ON dictionary_contributors(chat_id)
-                    WHERE chat_id IS NOT NULL
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS dictionary_entry_examples (
-                        id BIGSERIAL PRIMARY KEY,
-                        entry_id BIGINT NOT NULL
-                            REFERENCES dictionary_entries(id) ON DELETE CASCADE,
-                        position INTEGER NOT NULL,
-                        text TEXT NOT NULL,
-                        normalized_text TEXT NOT NULL DEFAULT '',
-                        UNIQUE (entry_id, position)
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_examples_entry
-                    ON dictionary_entry_examples(entry_id)
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS dictionary_entry_notes (
-                        id BIGSERIAL PRIMARY KEY,
-                        entry_id BIGINT NOT NULL
-                            REFERENCES dictionary_entries(id) ON DELETE CASCADE,
-                        position INTEGER NOT NULL,
-                        text TEXT NOT NULL,
-                        normalized_text TEXT NOT NULL DEFAULT '',
-                        UNIQUE (entry_id, position)
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_notes_entry
-                    ON dictionary_entry_notes(entry_id)
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS dictionary_entry_comments (
-                        id BIGSERIAL PRIMARY KEY,
-                        entry_id BIGINT NOT NULL
-                            REFERENCES dictionary_entries(id) ON DELETE CASCADE,
-                        contributor_id BIGINT REFERENCES dictionary_contributors(id)
-                            ON DELETE SET NULL,
-                        text TEXT NOT NULL,
-                        normalized_text TEXT NOT NULL DEFAULT '',
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_comments_entry
-                    ON dictionary_entry_comments(entry_id)
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_comments_contributor
-                    ON dictionary_entry_comments(contributor_id)
-                    """
-                )
-                cursor.execute(
-                    """
-                    ALTER TABLE dictionary_entries
-                    ADD COLUMN IF NOT EXISTS normalized_word TEXT NOT NULL DEFAULT ''
-                    """
-                )
-                cursor.execute(
-                    """
-                    ALTER TABLE dictionary_entries
-                    ADD COLUMN IF NOT EXISTS normalized_translation TEXT NOT NULL DEFAULT ''
-                    """
-                )
-                cursor.execute(
-                    """
-                    UPDATE dictionary_entries
-                    SET normalized_word = btrim(
-                            regexp_replace(
-                                lower(translate(word, '1!l|I', 'iiiii')),
-                                '\s+',
-                                ' ',
-                                'g'
-                            )
-                        ),
-                        normalized_translation = btrim(
-                            regexp_replace(
-                                regexp_replace(
-                                    lower(translate(translation, '1!l|I', 'iiiii')),
-                                    '[(){}\[\],.;:!?\"''«»]+',
-                                    ' ',
-                                    'g'
-                                ),
-                                '\s+',
-                                ' ',
-                                'g'
-                            )
-                        )
-                    WHERE normalized_word = ''
-                       OR normalized_translation = ''
-                       OR normalized_translation ~ '[(){}\[\],.;:!?\"''«»]'
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_dictionary_entries_source
-                    ON dictionary_entries(source)
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_dictionary_entries_normalized_word
-                    ON dictionary_entries(source, normalized_word)
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_dictionary_entries_normalized_translation
-                    ON dictionary_entries(source, normalized_translation)
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_dictionary_entries_contributor
-                    ON dictionary_entries(contributor_id)
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS dictionary_entry_chunks (
-                        id BIGSERIAL PRIMARY KEY,
-                        entry_id BIGINT NOT NULL
-                            REFERENCES dictionary_entries(id) ON DELETE CASCADE,
-                        source TEXT NOT NULL CHECK (source IN ('core', 'user')),
-                        chunk_type TEXT NOT NULL CHECK (
-                            chunk_type IN ('title', 'translation', 'example', 'note', 'comment')
-                        ),
-                        source_row_id BIGINT,
-                        chunk_order INTEGER NOT NULL DEFAULT 0,
-                        chunk_text TEXT NOT NULL,
-                        normalized_chunk_text TEXT NOT NULL DEFAULT '',
-                        UNIQUE (entry_id, chunk_type, chunk_order)
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    ALTER TABLE dictionary_entry_chunks
-                    ADD COLUMN IF NOT EXISTS source_row_id BIGINT
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_chunks_entry
-                    ON dictionary_entry_chunks(entry_id)
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_chunks_source_type
-                    ON dictionary_entry_chunks(source, chunk_type)
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_dictionary_entry_chunks_search_vector
-                    ON dictionary_entry_chunks
-                    USING GIN (to_tsvector('simple', normalized_chunk_text))
-                    """
-                )
-                vector_type = f"vector({self._rag_vector_dimensions})"
-                cursor.execute(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS dictionary_chunk_embeddings (
-                        chunk_id BIGINT PRIMARY KEY
-                            REFERENCES dictionary_entry_chunks(id) ON DELETE CASCADE,
-                        embedding_provider TEXT,
-                        embedding_model TEXT,
-                        embedding_version TEXT NOT NULL DEFAULT '',
-                        vector_dimensions INTEGER,
-                        embedding_status TEXT NOT NULL DEFAULT 'pending' CHECK (
-                            embedding_status IN ('pending', 'ready', 'error')
-                        ),
-                        embedding {vector_type},
-                        content_hash TEXT NOT NULL DEFAULT '',
-                        last_indexed_at TIMESTAMPTZ,
-                        last_error TEXT NOT NULL DEFAULT ''
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    SELECT format_type(a.atttypid, a.atttypmod)
-                    FROM pg_attribute AS a
-                    JOIN pg_class AS c ON c.oid = a.attrelid
-                    WHERE c.relname = 'dictionary_chunk_embeddings'
-                      AND a.attname = 'embedding'
-                      AND NOT a.attisdropped
-                    """
-                )
-                embedding_row = cursor.fetchone()
-                embedding_type = (
-                    str(embedding_row[0]) if embedding_row and embedding_row[0] else None
-                )
-                if embedding_type is None:
-                    cursor.execute(
-                        f"""
-                        ALTER TABLE dictionary_chunk_embeddings
-                        ADD COLUMN embedding {vector_type}
-                        """
-                    )
-                elif embedding_type != vector_type:
-                    cursor.execute("DROP INDEX IF EXISTS idx_dictionary_chunk_embeddings_hnsw")
-                    cursor.execute(
-                        """
-                        UPDATE dictionary_chunk_embeddings
-                        SET embedding = NULL,
-                            vector_dimensions = NULL,
-                            embedding_status = 'pending',
-                            last_indexed_at = NULL,
-                            last_error = ''
-                        """
-                    )
-                    cursor.execute(
-                        f"""
-                        ALTER TABLE dictionary_chunk_embeddings
-                        ALTER COLUMN embedding TYPE {vector_type}
-                        USING NULL
-                        """
-                    )
-                cursor.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_dictionary_chunk_embeddings_hnsw
-                    ON dictionary_chunk_embeddings
-                    USING hnsw (embedding vector_cosine_ops)
-                    """
-                )
-            connection.commit()
+    def require_schema(self) -> None:
+        """Проверить, что схема уже создана через Alembic.
+
+        Raises:
+            RuntimeError: Если миграции еще не применены.
+        """
+        with (
+            self._connect() as connection,
+            connection.cursor(cursor_factory=RealDictCursor) as cursor,
+        ):
+            cursor.execute(
+                """
+                SELECT to_regclass('public.alembic_version') AS table_name
+                """
+            )
+            table_row = cursor.fetchone()
+            if table_row is None or table_row["table_name"] is None:
+                raise RuntimeError(self._schema_error_message())
+            cursor.execute(
+                """
+                SELECT version_num
+                FROM alembic_version
+                LIMIT 1
+                """
+            )
+            version_row = cursor.fetchone()
+            if version_row is None:
+                raise RuntimeError(self._schema_error_message())
+            cursor.execute(
+                """
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name = 'dictionary_entries'
+                """
+            )
+            if cursor.fetchone() is None:
+                raise RuntimeError(self._schema_error_message())
+
+    @staticmethod
+    def _schema_error_message() -> str:
+        return (
+            "Схема PostgreSQL не инициализирована. Примените миграции командой `make db-upgrade`."
+        )
 
     def ensure_user(self, user: TelegramUser) -> None:
         """Создать пользователя в базе, если его еще нет.

@@ -18,11 +18,8 @@ def run() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     config = load_config()
-    db_repository = PostgresRepository(
-        config.database,
-        rag_vector_dimensions=config.rag_embedding_dimensions,
-    )
-    db_repository.ensure_schema()
+    db_repository = PostgresRepository(config.database)
+    db_repository.require_schema()
 
     repositories = (
         PostgresDictionaryRepository(config.database, DictionarySource.CORE),
