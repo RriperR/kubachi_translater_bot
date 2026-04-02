@@ -78,16 +78,24 @@ class CsvSearchProvider:
     def _lite_score(self, entry: DictionaryEntry, query: str) -> int:
         score = 0
         word_candidates = comma_values(entry.word)
-        translation_tokens = set(tokenize(entry.translation))
-        comment_tokens = set(tokenize(entry.comments))
+        translation_tokens = tokenize(entry.translation)
+        comment_tokens = tokenize(entry.comments)
 
         if query in word_candidates:
-            score = max(score, 500)
+            score = max(score, 500 + self._position_bonus(word_candidates, query, 40))
         if query in translation_tokens:
-            score = max(score, 350)
+            score = max(score, 350 + self._position_bonus(translation_tokens, query, 25))
         if entry.source == DictionarySource.CORE and query in comment_tokens:
-            score = max(score, 120)
+            score = max(score, 120 + self._position_bonus(comment_tokens, query, 10))
         return score
+
+    @staticmethod
+    def _position_bonus(tokens: tuple[str, ...], query: str, max_bonus: int) -> int:
+        try:
+            position = tokens.index(query)
+        except ValueError:
+            return 0
+        return max(max_bonus - position, 0)
 
     def _complex_score(self, entry: DictionaryEntry, query: str) -> int:
         weighted_fields = (
