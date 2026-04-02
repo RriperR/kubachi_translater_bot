@@ -990,8 +990,8 @@ class PostgresDictionaryRepository:
             return 0
 
         chunks = self._build_rag_chunks(row)
-        cursor.execute("DELETE FROM dictionary_entry_chunks WHERE entry_id = %s", (entry_id,))
         if not chunks:
+            cursor.execute("DELETE FROM dictionary_entry_chunks WHERE entry_id = %s", (entry_id,))
             return 0
 
         cursor.executemany(
@@ -1006,6 +1006,11 @@ class PostgresDictionaryRepository:
                 normalized_chunk_text
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (entry_id, chunk_type, chunk_order) DO UPDATE
+            SET source = EXCLUDED.source,
+                source_row_id = EXCLUDED.source_row_id,
+                chunk_text = EXCLUDED.chunk_text,
+                normalized_chunk_text = EXCLUDED.normalized_chunk_text
             """,
             chunks,
         )
