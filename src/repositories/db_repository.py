@@ -17,7 +17,7 @@ from models import AdminStats, AdminSuggestion, SearchMode, TelegramUser, UserPr
 class PostgresRepository:
     """Репозиторий для работы с таблицами приложения в PostgreSQL."""
 
-    _EXPECTED_SCHEMA_REVISION = "20260403_0004"
+    _EXPECTED_SCHEMA_REVISION = "20260403_0005"
 
     def __init__(self, config: DatabaseConfig) -> None:
         """Сохранить параметры подключения к базе данных.
@@ -128,8 +128,6 @@ class PostgresRepository:
         chat_id: int,
         *,
         action_type: str | None = None,
-        action_query: str | None = None,
-        search_found: bool | None = None,
     ) -> None:
         """Сохранить действие пользователя в журнале.
 
@@ -137,14 +135,11 @@ class PostgresRepository:
             action: Текст действия для журнала.
             chat_id: Идентификатор чата пользователя.
             action_type: Структурированный тип действия.
-            action_query: Текст поискового запроса, если действие связано с поиском.
-            search_found: Признак того, были ли результаты у поискового запроса.
         """
         action_text = action.strip()[:1024]
         resolved_action_type = action_type or (
             "command" if action_text.startswith("/") else "generic"
         )
-        query_text = action_query.strip()[:1024] if action_query and action_query.strip() else None
         now_utc = datetime.now(timezone.utc)
         now_local = self._utc_plus_three_now()
         with self._connect() as connection:
@@ -158,19 +153,15 @@ class PostgresRepository:
                     INSERT INTO actions (
                         action,
                         action_type,
-                        action_query,
-                        search_found,
                         date_time,
                         created_at,
                         fk_user
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s)
                     """,
                     (
                         action_text,
                         resolved_action_type,
-                        query_text,
-                        search_found,
                         now_local.isoformat(sep=" ", timespec="seconds"),
                         now_utc,
                         user["id"],
@@ -197,9 +188,7 @@ class PostgresRepository:
         self.log_action(
             query,
             chat_id,
-            action_type="search",
-            action_query=query,
-            search_found=found,
+            action_type="search" if found else "not_found",
         )
 
     def insert_suggestion(self, user: TelegramUser, text: str) -> int:
@@ -391,11 +380,11 @@ class PostgresRepository:
                 """
                 SELECT COUNT(*)
                 FROM actions
-                WHERE action_type = 'search'
+                WHERE action_type IN ('search', 'not_found')
                 """,
             )
-            top_queries = self._fetch_query_stats(cursor, search_found=True)
-            failed_queries = self._fetch_query_stats(cursor, search_found=False)
+            top_queries = self._fetch_query_stats(cursor, action_type="search")
+            failed_queries = self._fetch_query_stats(cursor, action_type="not_found")
             user_entries_count = self._scalar(
                 cursor,
                 "SELECT COUNT(*) FROM dictionary_entries WHERE source = 'user'",
@@ -451,7 +440,7 @@ class PostgresRepository:
                 SELECT COUNT(*)
                 FROM actions
                 WHERE fk_user = %s
-                  AND action_type = 'search'
+                  AND action_type IN ('search', 'not_found')
                 """,
                 (user_id,),
             )
@@ -597,19 +586,18 @@ class PostgresRepository:
     @staticmethod
     def _fetch_query_stats(
         cursor: Any,
-        search_found: bool,
+        action_type: str,
     ) -> tuple[tuple[str, int], ...]:
         cursor.execute(
             """
-            SELECT COALESCE(NULLIF(action_query, ''), action) AS query, COUNT(*) AS hits
+            SELECT action AS query, COUNT(*) AS hits
             FROM actions
-            WHERE action_type = 'search'
-              AND search_found IS NOT DISTINCT FROM %s
-            GROUP BY COALESCE(NULLIF(action_query, ''), action)
+            WHERE action_type = %s
+            GROUP BY action
             ORDER BY hits DESC, query ASC
             LIMIT 10
             """,
-            (search_found,),
+            (action_type,),
         )
         rows = cursor.fetchall()
         return tuple((str(row["query"]), int(row["hits"])) for row in rows)
