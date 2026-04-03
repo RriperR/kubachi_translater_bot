@@ -44,13 +44,18 @@ def test_build_user_profile_summary_contains_main_fields() -> None:
         suggestions_count=1,
     )
 
-    summary = DictionaryBotHandlers._build_user_profile_summary(profile)
+    summary = DictionaryBotHandlers._build_user_profile_summary(
+        profile,
+        reference_dt=datetime(2026, 4, 10, 9, 0),
+    )
 
     assert "Ваш профиль" in summary
-    assert "@tester" in summary
     assert "123456" in summary
     assert "расширенный" in summary
+    assert "03.04.2026 (7 дней)" in summary
     assert "14" in summary
     assert "2" in summary
     assert "3" in summary
     assert "1" in summary
+    assert "@tester" not in summary
+    assert "Последняя активность" not in summary

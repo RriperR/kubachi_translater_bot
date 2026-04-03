@@ -1575,33 +1575,63 @@ class DictionaryBotHandlers:
         )
 
     @classmethod
-    def _build_user_profile_summary(cls, profile: UserProfileStats) -> str:
+    def _build_user_profile_summary(
+        cls,
+        profile: UserProfileStats,
+        reference_dt: datetime | None = None,
+    ) -> str:
         """Собрать личную сводку пользователя для команды `/me`.
 
         Args:
             profile: Сводка по пользователю из базы данных.
+            reference_dt: Точка отсчета для расчета числа дней использования бота.
 
         Returns:
             Готовый текст профиля пользователя.
         """
-        username = f"@{profile.user.username}" if profile.user.username else "не указан"
-        full_name = (
-            " ".join(
-                part for part in (profile.user.first_name, profile.user.last_name) if part
-            ).strip()
-            or "без имени"
-        )
         mode_label = "расширенный" if profile.mode == SearchMode.COMPLEX else "точный"
         return (
             f"{texts.ME_TITLE_TEXT}\n\n"
-            f"Имя: {full_name}\n"
-            f"Username: {username}\n"
             f"chat_id: {profile.user.chat_id}\n"
             f"Режим поиска: {mode_label}\n"
-            f"Вы с ботом: {cls._format_datetime(profile.created_at)}\n"
-            f"Последняя активность: {cls._format_datetime(profile.last_activity_at)}\n\n"
+            f"Вы с ботом: {cls._format_profile_since(profile.created_at, reference_dt)}\n\n"
             f"Поисков: {profile.searches_count}\n"
             f"Добавленных статей: {profile.user_entries_count}\n"
             f"Комментариев: {profile.comments_count}\n"
             f"Предложений: {profile.suggestions_count}"
         )
+
+    @classmethod
+    def _format_profile_since(
+        cls,
+        created_at: datetime,
+        reference_dt: datetime | None = None,
+    ) -> str:
+        """Сформатировать дату первого использования бота с числом дней.
+
+        Args:
+            created_at: Дата первого появления пользователя в боте.
+            reference_dt: Точка отсчета для расчета числа дней.
+
+        Returns:
+            Строка формата `03.04.2026 (7 дней)`.
+        """
+        reference = reference_dt or datetime.now(created_at.tzinfo)
+        days_count = max((reference.date() - created_at.date()).days, 0)
+        return f"{created_at.strftime('%d.%m.%Y')} ({days_count} {cls._pluralize_days(days_count)})"
+
+    @staticmethod
+    def _pluralize_days(value: int) -> str:
+        """Подобрать правильное склонение для количества дней.
+
+        Args:
+            value: Количество дней.
+
+        Returns:
+            Подходящая словоформа: `день`, `дня` или `дней`.
+        """
+        if value % 10 == 1 and value % 100 != 11:
+            return "день"
+        if value % 10 in (2, 3, 4) and value % 100 not in (12, 13, 14):
+            return "дня"
+        return "дней"
