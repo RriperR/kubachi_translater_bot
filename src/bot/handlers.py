@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -19,19 +22,36 @@ from aiogram.types import (
 
 import texts
 from config import AppConfig
-from models import DictionarySource, SearchMode, TelegramUser, UserSubmittedEntry
+from models import (
+    AdminSuggestion,
+    BroadcastAudience,
+    DictionaryEntry,
+    DictionarySource,
+    SearchMode,
+    TelegramUser,
+    UserSubmittedEntry,
+)
 from normalization import normalize_kubachi_word
 from services.search import format_entry
 from services.session_store import SessionStore
 
 from .bootstrap import DictionaryRuntime
-from .flows import AddEntryFlow, CommentFlow, SuggestionFlow
+from .flows import (
+    AddEntryFlow,
+    AdminBroadcastFlow,
+    AdminCommentsFlow,
+    AdminEntriesFlow,
+    CommentFlow,
+    SuggestionFlow,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class DictionaryBotHandlers:
     """Обработчики Telegram-бота и все связанные служебные методы."""
+
+    _ADMIN_PAGE_SIZE = 5
 
     def __init__(
         self,
@@ -69,6 +89,7 @@ class DictionaryBotHandlers:
         router.message.register(self._handle_info, Command("info"))
         router.message.register(self._handle_chat_id, Command("chatid"))
         router.message.register(self._handle_getdb, Command("getdb"))
+        router.message.register(self._handle_admin_command, Command("admin"))
         router.message.register(self._handle_add_command, Command("add"))
         router.message.register(self._handle_comment_command, Command("comment"))
         router.message.register(self._handle_suggest_command, Command("suggest"))
@@ -82,9 +103,15 @@ class DictionaryBotHandlers:
         router.message.register(self._handle_add_confirm, AddEntryFlow.confirm)
         router.message.register(self._handle_comment_text, CommentFlow.text)
         router.message.register(self._handle_suggestion_text, SuggestionFlow.text)
+        router.message.register(self._handle_admin_broadcast_text, AdminBroadcastFlow.text)
+        router.message.register(self._handle_admin_broadcast_days, AdminBroadcastFlow.days)
+        router.message.register(self._handle_admin_entry_input, AdminEntriesFlow.filter_value)
+        router.message.register(self._handle_admin_entry_input, AdminEntriesFlow.edit_value)
+        router.message.register(self._handle_admin_comment_input, AdminCommentsFlow.filter_value)
 
         router.callback_query.register(self._handle_mode_callback, F.data.startswith("mode:"))
         router.callback_query.register(self._handle_page_callback, F.data.startswith("page:"))
+        router.callback_query.register(self._handle_admin_callback, F.data.startswith("admin:"))
         router.message.register(self._handle_search, F.text & ~F.text.startswith("/"))
 
     async def _handle_start(self, message: Message, state: FSMContext) -> None:
@@ -133,6 +160,14 @@ class DictionaryBotHandlers:
         finally:
             if temp_path and temp_path.exists():
                 temp_path.unlink(missing_ok=True)
+
+    async def _handle_admin_command(self, message: Message, state: FSMContext) -> None:
+        await self._track_message(message, "/admin")
+        if not self._is_admin(message.chat.id):
+            await message.answer(texts.ADMIN_ONLY_TEXT)
+            return
+        await state.clear()
+        await message.answer(texts.ADMIN_ROOT_TEXT, reply_markup=self._admin_root_markup())
 
     async def _handle_add_command(self, message: Message, state: FSMContext) -> None:
         await self._track_message(message, "/add")
@@ -274,10 +309,17 @@ class DictionaryBotHandlers:
             return
 
         try:
+            actor = self._extract_actor(message)
+            suggestion_id = await asyncio.to_thread(
+                self._db_repository.insert_suggestion,
+                actor,
+                suggestion_text,
+            )
             await self._notify_admin(
                 self._build_suggestion_notification(
-                    self._extract_actor(message),
+                    actor,
                     suggestion_text,
+                    suggestion_id,
                 )
             )
             await asyncio.to_thread(self._db_repository.log_action, "SUGGEST", message.chat.id)
@@ -286,6 +328,264 @@ class DictionaryBotHandlers:
             await self._handle_failure(message.chat.id, exc)
         finally:
             await state.clear()
+
+    async def _handle_admin_callback(self, callback: CallbackQuery, state: FSMContext) -> None:
+        await callback.answer()
+        message_obj = callback.message
+        if not isinstance(message_obj, Message):
+            return
+        message = message_obj
+        if not self._is_admin(message.chat.id):
+            await message.answer(texts.ADMIN_ONLY_TEXT)
+            return
+
+        data = callback.data or ""
+        if data == "admin:root":
+            await state.clear()
+            await message.answer(texts.ADMIN_ROOT_TEXT, reply_markup=self._admin_root_markup())
+            return
+        if data == "admin:stats":
+            await self._show_admin_stats(message.chat.id)
+            return
+        if data == "admin:broadcast":
+            await state.clear()
+            await state.set_state(AdminBroadcastFlow.text)
+            await message.answer(texts.ADMIN_BROADCAST_TEXT_PROMPT)
+            return
+        if data.startswith("admin:broadcast:audience:"):
+            await self._handle_broadcast_audience_callback(message, state, data)
+            return
+        if data == "admin:broadcast:edit":
+            await state.set_state(AdminBroadcastFlow.text)
+            await message.answer(texts.ADMIN_BROADCAST_TEXT_PROMPT)
+            return
+        if data == "admin:broadcast:send":
+            await self._send_broadcast(message.chat.id, state)
+            return
+        if data == "admin:broadcast:cancel":
+            await state.clear()
+            await message.answer(texts.ADMIN_CANCELLED_TEXT, reply_markup=self._admin_root_markup())
+            return
+        if data == "admin:entries":
+            await self._show_admin_entries_page(message.chat.id, state, offset=0)
+            return
+        if data.startswith("admin:entries:page:"):
+            await self._show_admin_entries_page(
+                message.chat.id,
+                state,
+                offset=int(data.rsplit(":", 1)[1]),
+            )
+            return
+        if data == "admin:entries:filter:word":
+            await state.set_state(AdminEntriesFlow.filter_value)
+            await state.update_data(admin_entries_input_mode="word_filter")
+            await message.answer(texts.ADMIN_ENTRIES_WORD_FILTER_PROMPT)
+            return
+        if data == "admin:entries:filter:author":
+            await state.set_state(AdminEntriesFlow.filter_value)
+            await state.update_data(admin_entries_input_mode="author_filter")
+            await message.answer(texts.ADMIN_ENTRIES_AUTHOR_FILTER_PROMPT)
+            return
+        if data == "admin:entries:filters:clear":
+            await state.update_data(
+                admin_entries_word_filter=None,
+                admin_entries_author_filter=None,
+            )
+            await self._show_admin_entries_page(message.chat.id, state, offset=0)
+            return
+        if data == "admin:entries:open":
+            await state.set_state(AdminEntriesFlow.filter_value)
+            await state.update_data(admin_entries_input_mode="open")
+            await message.answer(texts.ADMIN_ENTRIES_OPEN_PROMPT)
+            return
+        if data.startswith("admin:entries:open:"):
+            await self._show_admin_entry_details(message.chat.id, int(data.rsplit(":", 1)[1]))
+            return
+        if data.startswith("admin:entries:edit:"):
+            _, _, _, entry_id_text, field_name = data.split(":", 4)
+            await state.set_state(AdminEntriesFlow.edit_value)
+            await state.update_data(
+                admin_entries_input_mode="edit",
+                admin_edit_entry_id=int(entry_id_text),
+                admin_edit_field=field_name,
+            )
+            await message.answer(self._edit_prompt_for_field(field_name))
+            return
+        if data.startswith("admin:entries:delete:"):
+            entry_id = int(data.rsplit(":", 1)[1])
+            await message.answer(
+                texts.ADMIN_ENTRIES_DELETE_CONFIRM_TEXT.format(entry_id=entry_id),
+                reply_markup=self._confirm_delete_entry_markup(entry_id),
+            )
+            return
+        if data.startswith("admin:entries:delete_confirm:"):
+            entry_id = int(data.rsplit(":", 1)[1])
+            deleted = await asyncio.to_thread(self._user_repository.delete_user_entry, entry_id)
+            await message.answer(
+                texts.ADMIN_ENTRIES_DELETE_SUCCESS_TEXT
+                if deleted
+                else texts.ADMIN_ENTRIES_NOT_FOUND_TEXT
+            )
+            await self._show_admin_entries_page(message.chat.id, state, offset=0)
+            return
+        if data == "admin:comments":
+            await self._show_admin_comments_page(message.chat.id, state, offset=0)
+            return
+        if data.startswith("admin:comments:page:"):
+            await self._show_admin_comments_page(
+                message.chat.id,
+                state,
+                offset=int(data.rsplit(":", 1)[1]),
+            )
+            return
+        if data == "admin:comments:filter:entry":
+            await state.set_state(AdminCommentsFlow.filter_value)
+            await state.update_data(admin_comments_input_mode="entry_filter")
+            await message.answer(texts.ADMIN_COMMENTS_ENTRY_FILTER_PROMPT)
+            return
+        if data == "admin:comments:filter:author":
+            await state.set_state(AdminCommentsFlow.filter_value)
+            await state.update_data(admin_comments_input_mode="author_filter")
+            await message.answer(texts.ADMIN_COMMENTS_AUTHOR_FILTER_PROMPT)
+            return
+        if data == "admin:comments:filters:clear":
+            await state.update_data(
+                admin_comments_entry_filter=None,
+                admin_comments_author_filter=None,
+            )
+            await self._show_admin_comments_page(message.chat.id, state, offset=0)
+            return
+        if data == "admin:comments:delete":
+            await state.set_state(AdminCommentsFlow.filter_value)
+            await state.update_data(admin_comments_input_mode="delete")
+            await message.answer(texts.ADMIN_COMMENTS_DELETE_PROMPT)
+            return
+        if data.startswith("admin:comments:delete:"):
+            comment_id = int(data.rsplit(":", 1)[1])
+            deleted = await asyncio.to_thread(self._main_repository.delete_comment, comment_id)
+            await message.answer(
+                texts.ADMIN_COMMENTS_DELETE_SUCCESS_TEXT
+                if deleted
+                else texts.ADMIN_COMMENTS_NOT_FOUND_TEXT
+            )
+            await self._show_admin_comments_page(message.chat.id, state, offset=0)
+            return
+        if data == "admin:suggestions":
+            await self._show_admin_suggestions_page(message.chat.id, offset=0)
+            return
+        if data.startswith("admin:suggestions:page:"):
+            await self._show_admin_suggestions_page(
+                message.chat.id,
+                offset=int(data.rsplit(":", 1)[1]),
+            )
+            return
+
+        await message.answer(texts.ADMIN_STATE_MISSING_TEXT, reply_markup=self._admin_root_markup())
+
+    async def _handle_admin_broadcast_text(self, message: Message, state: FSMContext) -> None:
+        if not self._is_admin(message.chat.id):
+            return
+        broadcast_text = (message.text or "").strip()
+        if not broadcast_text:
+            await message.answer(texts.ADMIN_BROADCAST_EMPTY_TEXT)
+            return
+        await state.update_data(admin_broadcast_text=broadcast_text)
+        await message.answer(
+            self._build_broadcast_preview(broadcast_text),
+            reply_markup=self._broadcast_audience_markup(),
+        )
+
+    async def _handle_admin_broadcast_days(self, message: Message, state: FSMContext) -> None:
+        if not self._is_admin(message.chat.id):
+            return
+        raw_days = (message.text or "").strip()
+        if not raw_days.isdigit() or int(raw_days) <= 0:
+            await message.answer(texts.ADMIN_BROADCAST_DAYS_ERROR_TEXT)
+            return
+        days = int(raw_days)
+        await state.update_data(
+            admin_broadcast_audience=BroadcastAudience.ACTIVE_DAYS.value,
+            admin_broadcast_days=days,
+        )
+        await state.set_state(AdminBroadcastFlow.confirm)
+        data = await state.get_data()
+        await message.answer(
+            self._build_broadcast_confirmation(
+                str(data.get("admin_broadcast_text", "")),
+                BroadcastAudience.ACTIVE_DAYS,
+                days,
+            ),
+            reply_markup=self._broadcast_confirm_markup(),
+        )
+
+    async def _handle_admin_entry_input(self, message: Message, state: FSMContext) -> None:
+        if not self._is_admin(message.chat.id):
+            return
+        data = await state.get_data()
+        input_mode = data.get("admin_entries_input_mode")
+        value = (message.text or "").strip()
+        if input_mode == "word_filter":
+            await state.update_data(admin_entries_word_filter=value or None)
+            await self._show_admin_entries_page(message.chat.id, state, offset=0)
+            return
+        if input_mode == "author_filter":
+            await state.update_data(admin_entries_author_filter=value or None)
+            await self._show_admin_entries_page(message.chat.id, state, offset=0)
+            return
+        if input_mode == "open":
+            if not value.isdigit():
+                await message.answer(texts.ADMIN_ENTRY_ID_ERROR_TEXT)
+                return
+            await self._show_admin_entry_details(message.chat.id, int(value))
+            return
+        entry_id = data.get("admin_edit_entry_id")
+        field_name = data.get("admin_edit_field")
+        if entry_id is None or field_name is None:
+            await state.clear()
+            await message.answer(
+                texts.ADMIN_STATE_MISSING_TEXT,
+                reply_markup=self._admin_root_markup(),
+            )
+            return
+        updated = await asyncio.to_thread(
+            self._user_repository.update_user_entry_field,
+            int(entry_id),
+            str(field_name),
+            value,
+        )
+        await state.clear()
+        await message.answer(
+            texts.ADMIN_ENTRIES_EDIT_SUCCESS_TEXT if updated else texts.ADMIN_ENTRIES_NOT_FOUND_TEXT
+        )
+        if updated:
+            await self._show_admin_entry_details(message.chat.id, int(entry_id))
+
+    async def _handle_admin_comment_input(self, message: Message, state: FSMContext) -> None:
+        if not self._is_admin(message.chat.id):
+            return
+        data = await state.get_data()
+        input_mode = data.get("admin_comments_input_mode")
+        value = (message.text or "").strip()
+        if input_mode == "entry_filter":
+            await state.update_data(admin_comments_entry_filter=value or None)
+            await self._show_admin_comments_page(message.chat.id, state, offset=0)
+            return
+        if input_mode == "author_filter":
+            await state.update_data(admin_comments_author_filter=value or None)
+            await self._show_admin_comments_page(message.chat.id, state, offset=0)
+            return
+        if input_mode == "delete":
+            if not value.isdigit():
+                await message.answer(texts.ADMIN_COMMENT_ID_ERROR_TEXT)
+                return
+            deleted = await asyncio.to_thread(self._main_repository.delete_comment, int(value))
+            await state.clear()
+            await message.answer(
+                texts.ADMIN_COMMENTS_DELETE_SUCCESS_TEXT
+                if deleted
+                else texts.ADMIN_COMMENTS_NOT_FOUND_TEXT
+            )
+            await self._show_admin_comments_page(message.chat.id, state, offset=0)
 
     async def _handle_mode_command(self, message: Message) -> None:
         await self._track_message(message, "/mode")
@@ -338,12 +638,19 @@ class DictionaryBotHandlers:
         if not query:
             return
 
-        await self._track_message(message, f'"{query}"')
+        actor = self._extract_actor(message)
         await self._notify_admin(f'Пользователь {self._format_actor(message)} ищет "{query}"')
 
         try:
+            await asyncio.to_thread(self._db_repository.ensure_user, actor)
             mode = await asyncio.to_thread(self._db_repository.get_user_mode, message.chat.id)
             entries = await asyncio.to_thread(self._search_service.search, query, mode)
+            await asyncio.to_thread(
+                self._db_repository.log_search_query,
+                query,
+                actor.chat_id,
+                bool(entries),
+            )
         except Exception as exc:  # pragma: no cover
             await self._handle_failure(message.chat.id, exc)
             return
@@ -421,6 +728,250 @@ class DictionaryBotHandlers:
         except Exception:  # pragma: no cover
             logger.exception("Failed to notify admin")
 
+    async def _handle_broadcast_audience_callback(
+        self,
+        message: Message,
+        state: FSMContext,
+        data: str,
+    ) -> None:
+        audience = BroadcastAudience(data.rsplit(":", 1)[1])
+        if audience == BroadcastAudience.ACTIVE_DAYS:
+            await state.set_state(AdminBroadcastFlow.days)
+            await message.answer(texts.ADMIN_BROADCAST_DAYS_PROMPT)
+            return
+        await state.update_data(admin_broadcast_audience=audience.value, admin_broadcast_days=None)
+        await state.set_state(AdminBroadcastFlow.confirm)
+        state_data = await state.get_data()
+        await message.answer(
+            self._build_broadcast_confirmation(
+                str(state_data.get("admin_broadcast_text", "")),
+                audience,
+                None,
+            ),
+            reply_markup=self._broadcast_confirm_markup(),
+        )
+
+    async def _send_broadcast(self, chat_id: int, state: FSMContext) -> None:
+        data = await state.get_data()
+        broadcast_text = str(data.get("admin_broadcast_text") or "").strip()
+        audience_raw = data.get("admin_broadcast_audience")
+        if not broadcast_text or audience_raw is None:
+            await state.clear()
+            await self._bot.send_message(
+                chat_id,
+                texts.ADMIN_STATE_MISSING_TEXT,
+                reply_markup=self._admin_root_markup(),
+            )
+            return
+
+        audience = BroadcastAudience(str(audience_raw))
+        days = int(data.get("admin_broadcast_days") or 0) or None
+        recipients = await self._collect_broadcast_recipients(audience, days)
+        if not recipients:
+            await state.clear()
+            await self._bot.send_message(
+                chat_id,
+                texts.ADMIN_BROADCAST_NO_RECIPIENTS_TEXT,
+                reply_markup=self._admin_root_markup(),
+            )
+            return
+
+        success = 0
+        blocked = 0
+        errors = 0
+        for recipient in recipients:
+            try:
+                await self._bot.send_message(recipient.chat_id, broadcast_text)
+                success += 1
+            except TelegramForbiddenError:
+                blocked += 1
+            except TelegramBadRequest:
+                errors += 1
+            except Exception:  # pragma: no cover
+                logger.exception("Broadcast delivery failed")
+                errors += 1
+            await asyncio.sleep(0.03)
+
+        await state.clear()
+        await self._bot.send_message(chat_id, texts.ADMIN_BROADCAST_SENT_TEXT)
+        await self._bot.send_message(
+            chat_id,
+            self._build_broadcast_report(success=success, blocked=blocked, errors=errors),
+            reply_markup=self._admin_root_markup(),
+        )
+
+    async def _collect_broadcast_recipients(
+        self,
+        audience: BroadcastAudience,
+        days: int | None,
+    ) -> list[TelegramUser]:
+        if audience == BroadcastAudience.ALL:
+            return await asyncio.to_thread(self._db_repository.fetch_broadcast_recipients_all)
+        if audience == BroadcastAudience.WITH_ACTIONS:
+            return await asyncio.to_thread(
+                self._db_repository.fetch_broadcast_recipients_with_actions
+            )
+        return await asyncio.to_thread(
+            self._db_repository.fetch_broadcast_recipients_active,
+            days or 1,
+        )
+
+    async def _show_admin_stats(self, chat_id: int) -> None:
+        stats = await asyncio.to_thread(self._db_repository.fetch_admin_stats)
+        await self._bot.send_message(
+            chat_id,
+            self._build_stats_summary(
+                total_users=stats.total_users,
+                active_users_day=stats.active_users_day,
+                active_users_week=stats.active_users_week,
+                active_users_month=stats.active_users_month,
+                new_users_day=stats.new_users_day,
+                new_users_week=stats.new_users_week,
+                new_users_month=stats.new_users_month,
+                total_searches=stats.total_searches,
+                top_queries=stats.top_queries,
+                failed_queries=stats.failed_queries,
+                user_entries=stats.user_entries_count,
+                comments=stats.comments_count,
+                suggestions=stats.suggestions_count,
+            ),
+            reply_markup=self._admin_root_markup(),
+        )
+
+    async def _show_admin_entries_page(
+        self,
+        chat_id: int,
+        state: FSMContext,
+        offset: int,
+    ) -> None:
+        await state.set_state(AdminEntriesFlow.browse)
+        state_data = await state.get_data()
+        records = await asyncio.to_thread(
+            self._user_repository.list_user_entries,
+            self._ADMIN_PAGE_SIZE,
+            offset,
+            state_data.get("admin_entries_word_filter"),
+            state_data.get("admin_entries_author_filter"),
+        )
+        await state.update_data(admin_entries_offset=offset, admin_entries_input_mode=None)
+        if not records:
+            await self._bot.send_message(
+                chat_id,
+                texts.ADMIN_ENTRIES_EMPTY_TEXT,
+                reply_markup=self._admin_entries_markup(offset, has_next=False),
+            )
+            return
+
+        cards = [
+            self._build_user_entry_card(
+                entry=record.entry,
+                added_at=self._format_datetime(record.created_at),
+                author=record.author,
+                entry_id=record.entry_id,
+                compact=True,
+            )
+            for record in records
+        ]
+        filters_line = self._build_admin_filters_line(
+            state_data.get("admin_entries_word_filter"),
+            state_data.get("admin_entries_author_filter"),
+        )
+        await self._bot.send_message(
+            chat_id,
+            f"{texts.ADMIN_ENTRIES_LIST_TITLE}\n{filters_line}\n\n" + "\n\n".join(cards),
+            reply_markup=self._admin_entries_markup(
+                offset=offset,
+                has_next=len(records) == self._ADMIN_PAGE_SIZE,
+            ),
+        )
+
+    async def _show_admin_entry_details(self, chat_id: int, entry_id: int) -> None:
+        record = await asyncio.to_thread(self._user_repository.get_user_entry, entry_id)
+        if record is None:
+            await self._bot.send_message(chat_id, texts.ADMIN_ENTRIES_NOT_FOUND_TEXT)
+            return
+        await self._bot.send_message(
+            chat_id,
+            self._build_user_entry_card(
+                entry=record.entry,
+                added_at=self._format_datetime(record.created_at),
+                author=record.author,
+                entry_id=record.entry_id,
+            ),
+            reply_markup=self._admin_entry_details_markup(record.entry_id),
+        )
+
+    async def _show_admin_comments_page(
+        self,
+        chat_id: int,
+        state: FSMContext,
+        offset: int,
+    ) -> None:
+        await state.set_state(AdminCommentsFlow.browse)
+        state_data = await state.get_data()
+        records = await asyncio.to_thread(
+            self._main_repository.list_comments,
+            self._ADMIN_PAGE_SIZE,
+            offset,
+            state_data.get("admin_comments_entry_filter"),
+            state_data.get("admin_comments_author_filter"),
+        )
+        await state.update_data(admin_comments_offset=offset, admin_comments_input_mode=None)
+        if not records:
+            await self._bot.send_message(
+                chat_id,
+                texts.ADMIN_COMMENTS_EMPTY_TEXT,
+                reply_markup=self._admin_comments_markup(offset, has_next=False),
+            )
+            return
+
+        cards = [
+            self._build_comment_card(
+                entry_title=record.entry_title,
+                comment_text=record.comment_text,
+                author=record.author,
+                created_at=self._format_datetime(record.created_at),
+                comment_id=record.comment_id,
+                entry_id=record.entry_id,
+            )
+            for record in records
+        ]
+        filters_line = self._build_admin_filters_line(
+            state_data.get("admin_comments_entry_filter"),
+            state_data.get("admin_comments_author_filter"),
+        )
+        await self._bot.send_message(
+            chat_id,
+            f"{texts.ADMIN_COMMENTS_LIST_TITLE}\n{filters_line}\n\n" + "\n\n".join(cards),
+            reply_markup=self._admin_comments_markup(
+                offset=offset,
+                has_next=len(records) == self._ADMIN_PAGE_SIZE,
+            ),
+        )
+
+    async def _show_admin_suggestions_page(self, chat_id: int, offset: int) -> None:
+        suggestions = await asyncio.to_thread(
+            self._db_repository.fetch_suggestions,
+            self._ADMIN_PAGE_SIZE,
+            offset,
+        )
+        if not suggestions:
+            await self._bot.send_message(
+                chat_id,
+                texts.ADMIN_SUGGESTIONS_EMPTY_TEXT,
+                reply_markup=self._admin_suggestions_markup(offset, has_next=False),
+            )
+            return
+        await self._bot.send_message(
+            chat_id,
+            f"{texts.ADMIN_SUGGESTIONS_LIST_TITLE}\n\n"
+            + "\n\n".join(self._build_suggestion_card(item) for item in suggestions),
+            reply_markup=self._admin_suggestions_markup(
+                offset=offset,
+                has_next=len(suggestions) == self._ADMIN_PAGE_SIZE,
+            ),
+        )
+
     def _extract_actor(self, message: Message) -> TelegramUser:
         from_user = message.from_user
         return TelegramUser(
@@ -475,21 +1026,409 @@ class DictionaryBotHandlers:
         username = f"@{from_user.username}" if from_user.username else str(message.chat.id)
         return f'{username} "{from_user.first_name}"'
 
+    def _admin_root_markup(self) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="Рассылка", callback_data="admin:broadcast"),
+                    InlineKeyboardButton(text="Статьи", callback_data="admin:entries"),
+                ],
+                [
+                    InlineKeyboardButton(text="Комментарии", callback_data="admin:comments"),
+                    InlineKeyboardButton(text="Статистика", callback_data="admin:stats"),
+                ],
+                [InlineKeyboardButton(text="Предложения", callback_data="admin:suggestions")],
+            ]
+        )
+
+    def _broadcast_audience_markup(self) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="Всем", callback_data="admin:broadcast:audience:all"),
+                    InlineKeyboardButton(
+                        text="Активным за N дней",
+                        callback_data="admin:broadcast:audience:active_days",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="Писавшим боту",
+                        callback_data="admin:broadcast:audience:with_actions",
+                    )
+                ],
+                [InlineKeyboardButton(text="Отмена", callback_data="admin:broadcast:cancel")],
+            ]
+        )
+
+    def _broadcast_confirm_markup(self) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="Отправить", callback_data="admin:broadcast:send"),
+                    InlineKeyboardButton(
+                        text="Изменить текст",
+                        callback_data="admin:broadcast:edit",
+                    ),
+                ],
+                [InlineKeyboardButton(text="Отмена", callback_data="admin:broadcast:cancel")],
+            ]
+        )
+
+    def _admin_entries_markup(self, offset: int, has_next: bool) -> InlineKeyboardMarkup:
+        keyboard: list[list[InlineKeyboardButton]] = []
+        pagination = self._build_pagination_row("admin:entries:page", offset, has_next)
+        if pagination:
+            keyboard.append(pagination)
+        keyboard.extend(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="Фильтр по слову",
+                        callback_data="admin:entries:filter:word",
+                    ),
+                    InlineKeyboardButton(
+                        text="Фильтр по автору",
+                        callback_data="admin:entries:filter:author",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(text="Открыть по ID", callback_data="admin:entries:open"),
+                    InlineKeyboardButton(
+                        text="Сбросить фильтры",
+                        callback_data="admin:entries:filters:clear",
+                    ),
+                ],
+                [InlineKeyboardButton(text="В меню", callback_data="admin:root")],
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+    def _admin_entry_details_markup(self, entry_id: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Редактировать слово",
+                        callback_data=f"admin:entries:edit:{entry_id}:word",
+                    ),
+                    InlineKeyboardButton(
+                        text="Редактировать перевод",
+                        callback_data=f"admin:entries:edit:{entry_id}:translation",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="Редактировать фразы",
+                        callback_data=f"admin:entries:edit:{entry_id}:phrases_raw",
+                    ),
+                    InlineKeyboardButton(
+                        text="Редактировать доп.инфо",
+                        callback_data=f"admin:entries:edit:{entry_id}:supporting_raw",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="Удалить",
+                        callback_data=f"admin:entries:delete:{entry_id}",
+                    ),
+                    InlineKeyboardButton(text="К списку", callback_data="admin:entries"),
+                ],
+                [InlineKeyboardButton(text="В меню", callback_data="admin:root")],
+            ]
+        )
+
+    def _confirm_delete_entry_markup(self, entry_id: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Подтвердить удаление",
+                        callback_data=f"admin:entries:delete_confirm:{entry_id}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="Назад",
+                        callback_data=f"admin:entries:open:{entry_id}",
+                    ),
+                    InlineKeyboardButton(text="В меню", callback_data="admin:root"),
+                ],
+            ]
+        )
+
+    def _admin_comments_markup(self, offset: int, has_next: bool) -> InlineKeyboardMarkup:
+        keyboard: list[list[InlineKeyboardButton]] = []
+        pagination = self._build_pagination_row("admin:comments:page", offset, has_next)
+        if pagination:
+            keyboard.append(pagination)
+        keyboard.extend(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="Фильтр по статье",
+                        callback_data="admin:comments:filter:entry",
+                    ),
+                    InlineKeyboardButton(
+                        text="Фильтр по автору",
+                        callback_data="admin:comments:filter:author",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="Удалить по ID",
+                        callback_data="admin:comments:delete",
+                    ),
+                    InlineKeyboardButton(
+                        text="Сбросить фильтры",
+                        callback_data="admin:comments:filters:clear",
+                    ),
+                ],
+                [InlineKeyboardButton(text="В меню", callback_data="admin:root")],
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+    def _admin_suggestions_markup(self, offset: int, has_next: bool) -> InlineKeyboardMarkup:
+        keyboard: list[list[InlineKeyboardButton]] = []
+        pagination = self._build_pagination_row("admin:suggestions:page", offset, has_next)
+        if pagination:
+            keyboard.append(pagination)
+        keyboard.append([InlineKeyboardButton(text="В меню", callback_data="admin:root")])
+        return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+    def _build_pagination_row(
+        self,
+        prefix: str,
+        offset: int,
+        has_next: bool,
+    ) -> list[InlineKeyboardButton]:
+        row: list[InlineKeyboardButton] = []
+        if offset > 0:
+            row.append(
+                InlineKeyboardButton(
+                    text="Назад",
+                    callback_data=f"{prefix}:{max(offset - self._ADMIN_PAGE_SIZE, 0)}",
+                )
+            )
+        if has_next:
+            row.append(
+                InlineKeyboardButton(
+                    text="Дальше",
+                    callback_data=f"{prefix}:{offset + self._ADMIN_PAGE_SIZE}",
+                )
+            )
+        return row
+
+    def _edit_prompt_for_field(self, field_name: str) -> str:
+        prompts = {
+            "word": texts.ADMIN_ENTRY_EDIT_WORD_PROMPT,
+            "translation": texts.ADMIN_ENTRY_EDIT_TRANSLATION_PROMPT,
+            "phrases_raw": texts.ADMIN_ENTRY_EDIT_PHRASES_PROMPT,
+            "supporting_raw": texts.ADMIN_ENTRY_EDIT_SUPPORTING_PROMPT,
+        }
+        return prompts.get(field_name, texts.ADMIN_STATE_MISSING_TEXT)
+
     @staticmethod
-    def _build_suggestion_notification(actor: TelegramUser, suggestion_text: str) -> str:
+    def _build_broadcast_preview(text_value: str) -> str:
+        return (
+            f"{texts.ADMIN_BROADCAST_PREVIEW_TITLE}\n\n"
+            f"{text_value}\n\n"
+            f"{texts.ADMIN_BROADCAST_AUDIENCE_PROMPT}"
+        )
+
+    @staticmethod
+    def _build_broadcast_confirmation(
+        text_value: str,
+        audience: BroadcastAudience,
+        days: int | None,
+    ) -> str:
+        audience_label = {
+            BroadcastAudience.ALL: "все пользователи",
+            BroadcastAudience.ACTIVE_DAYS: f"активные за {days} дн.",
+            BroadcastAudience.WITH_ACTIONS: "все, кто писал боту",
+        }[audience]
+        return f"{texts.ADMIN_BROADCAST_CONFIRM_TITLE}\nАудитория: {audience_label}\n\n{text_value}"
+
+    @staticmethod
+    def _build_broadcast_report(success: int, blocked: int, errors: int) -> str:
+        return texts.ADMIN_BROADCAST_REPORT_TEXT.format(
+            success=success,
+            blocked=blocked,
+            errors=errors,
+        )
+
+    @classmethod
+    def _build_user_entry_card(
+        cls,
+        entry: DictionaryEntry,
+        added_at: str,
+        author: TelegramUser | None = None,
+        entry_id: int | None = None,
+        compact: bool = False,
+    ) -> str:
+        lines: list[str] = []
+        if entry_id is not None:
+            lines.append(f"#{entry_id}")
+        lines.append(entry.title)
+        lines.append(f"Автор: {cls._format_admin_user(author, entry)}")
+        lines.append(f"Дата: {added_at}")
+        if compact:
+            return "\n".join(lines)
+        lines.append("")
+        lines.append(format_entry(entry))
+        return "\n".join(lines).strip()
+
+    @classmethod
+    def _build_comment_card(
+        cls,
+        entry_title: str,
+        comment_text: str,
+        author: TelegramUser | None,
+        created_at: str,
+        comment_id: int | None = None,
+        entry_id: int | None = None,
+    ) -> str:
+        lines: list[str] = []
+        if comment_id is not None:
+            lines.append(f"#{comment_id}")
+        lines.append(f"Статья: {entry_title}")
+        if entry_id is not None:
+            lines.append(f"ID статьи: {entry_id}")
+        lines.append(f"Автор: {cls._format_admin_user(author)}")
+        lines.append(f"Дата: {created_at}")
+        lines.append(f"Комментарий: {comment_text}")
+        return "\n".join(lines)
+
+    @classmethod
+    def _build_suggestion_card(cls, suggestion: AdminSuggestion) -> str:
+        return (
+            f"#{suggestion.suggestion_id}\n"
+            f"Автор: {cls._format_admin_user(suggestion.author)}\n"
+            f"Дата: {cls._format_datetime(suggestion.created_at)}\n"
+            f"Статус: {suggestion.status}\n"
+            f"{suggestion.text}"
+        )
+
+    @staticmethod
+    def _build_stats_summary(
+        total_users: int,
+        active_users_day: int,
+        active_users_week: int,
+        active_users_month: int,
+        new_users_day: int,
+        new_users_week: int,
+        new_users_month: int,
+        total_searches: int,
+        top_queries: Any,
+        failed_queries: Any,
+        user_entries: int,
+        comments: int,
+        suggestions: int,
+    ) -> str:
+        top_queries_text = DictionaryBotHandlers._format_query_stats(top_queries)
+        failed_queries_text = DictionaryBotHandlers._format_query_stats(failed_queries)
+        failed_total = DictionaryBotHandlers._query_stats_total(failed_queries)
+        return (
+            f"{texts.ADMIN_STATS_TITLE}\n\n"
+            f"Пользователи: {total_users}\n"
+            f"Новые за день / неделю / месяц: "
+            f"{new_users_day} / {new_users_week} / {new_users_month}\n"
+            f"Активные за день / неделю / месяц: "
+            f"{active_users_day} / {active_users_week} / {active_users_month}\n\n"
+            f"Всего поисковых запросов: {total_searches}\n"
+            f"Топ запросов: {top_queries_text}\n"
+            f"Пустые или неудачные запросы: {failed_total}\n"
+            f"Топ неудачных запросов: {failed_queries_text}\n\n"
+            f"Пользовательских статей: {user_entries}\n"
+            f"Комментариев: {comments}\n"
+            f"Предложений: {suggestions}"
+        )
+
+    @staticmethod
+    def _query_stats_total(value: Any) -> int:
+        if isinstance(value, int):
+            return value
+        if isinstance(value, (tuple, list)):
+            total = 0
+            for item in value:
+                if isinstance(item, tuple) and len(item) >= 2:
+                    total += int(item[1])
+            return total
+        return 0
+
+    @staticmethod
+    def _format_query_stats(value: Any) -> str:
+        if isinstance(value, int):
+            return str(value)
+        if not value:
+            return texts.ADMIN_STATS_TOP_QUERIES_EMPTY_TEXT
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, tuple) and len(item) >= 2:
+                parts.append(f"{item[0]} ({item[1]})")
+            else:
+                parts.append(str(item))
+        return ", ".join(parts)
+
+    @staticmethod
+    def _build_admin_filters_line(primary: object, secondary: object) -> str:
+        parts: list[str] = []
+        if primary:
+            parts.append(f"слово/статья: {primary}")
+        if secondary:
+            parts.append(f"автор: {secondary}")
+        return "Фильтры: " + "; ".join(parts) if parts else "Фильтры: нет"
+
+    @staticmethod
+    def _format_datetime(value: datetime | str) -> str:
+        if isinstance(value, str):
+            return value
+        if value.tzinfo is not None:
+            value = value.astimezone().replace(tzinfo=None)
+        return value.strftime("%Y-%m-%d %H:%M")
+
+    @staticmethod
+    def _format_admin_user(
+        user: TelegramUser | None,
+        entry: DictionaryEntry | None = None,
+    ) -> str:
+        if user is not None:
+            username = f"@{user.username}" if user.username else "-"
+            full_name = " ".join(part for part in (user.first_name, user.last_name) if part).strip()
+            return f"{username} | {full_name or 'без имени'} | {user.chat_id}"
+        if entry is not None:
+            username = f"@{entry.contributor_username}" if entry.contributor_username else "-"
+            full_name = " ".join(
+                part for part in (entry.contributor_first_name, entry.contributor_last_name) if part
+            ).strip()
+            if full_name or username != "-":
+                return f"{username} | {full_name or 'без имени'}"
+        return "не указан"
+
+    @staticmethod
+    def _build_suggestion_notification(
+        actor: TelegramUser,
+        suggestion_text: str,
+        suggestion_id: int | None = None,
+    ) -> str:
         """Собрать уведомление администратору о новом предложении.
 
         Args:
             actor: Пользователь, отправивший предложение.
             suggestion_text: Текст идеи или замечания.
+            suggestion_id: Необязательный идентификатор предложения.
 
         Returns:
             Готовое текстовое уведомление для администратора.
         """
         username = f"@{actor.username}" if actor.username else str(actor.chat_id)
         full_name = " ".join(part for part in (actor.first_name, actor.last_name) if part).strip()
+        prefix = "Новое предложение"
+        if suggestion_id is not None:
+            prefix += f" #{suggestion_id}"
         return (
-            "Новое предложение от "
+            f"{prefix} от "
             f'{username} "{full_name or actor.first_name}" (chat_id={actor.chat_id}):\n\n'
             f"{suggestion_text}"
         )
