@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from bot.handlers import DictionaryBotHandlers
-from models import DictionaryEntry, DictionarySource, TelegramUser
+from models import BroadcastAudience, DictionaryEntry, DictionarySource, TelegramUser
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,25 @@ def test_build_broadcast_report_formats_counts() -> None:
     assert "12" in str(report)
     assert "3" in str(report)
     assert "2" in str(report)
+
+
+def test_build_broadcast_confirmation_contains_recipient_count() -> None:
+    """Подтверждение рассылки должно содержать аудиторию и число адресатов."""
+    helper = _require_helper("_build_broadcast_confirmation")
+
+    confirmation = _maybe_call(
+        helper,
+        text_value="Новость недели",
+        audience=BroadcastAudience.ALL,
+        days=None,
+        recipients_count=42,
+        content_label="текст",
+    )
+
+    text = str(confirmation)
+    assert "42" in text
+    assert "текст" in text
+    assert "Новость недели" in text
 
 
 def test_build_user_entry_card_contains_author_and_date() -> None:

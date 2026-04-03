@@ -485,14 +485,27 @@ class DictionaryBotHandlers:
     async def _handle_admin_broadcast_text(self, message: Message, state: FSMContext) -> None:
         if not self._is_admin(message.chat.id):
             return
-        broadcast_text = (message.text or "").strip()
-        if not broadcast_text:
-            await message.answer(texts.ADMIN_BROADCAST_EMPTY_TEXT)
+        if not self._supports_broadcast_message(message):
+            await message.answer(texts.ADMIN_BROADCAST_UNSUPPORTED_TEXT)
             return
+        broadcast_text = self._extract_broadcast_text(message)
         await state.update_data(admin_broadcast_text=broadcast_text)
+        await state.update_data(
+            admin_broadcast_source_chat_id=message.chat.id,
+            admin_broadcast_message_id=message.message_id,
+            admin_broadcast_content_label=self._describe_broadcast_content(message),
+        )
         await message.answer(
-            self._build_broadcast_preview(broadcast_text),
+            self._build_broadcast_preview(
+                text_value=broadcast_text,
+                content_label=self._describe_broadcast_content(message),
+            ),
             reply_markup=self._broadcast_audience_markup(),
+        )
+        await self._copy_broadcast_preview(
+            chat_id=message.chat.id,
+            source_chat_id=message.chat.id,
+            message_id=message.message_id,
         )
 
     async def _handle_admin_broadcast_days(self, message: Message, state: FSMContext) -> None:
@@ -503,9 +516,18 @@ class DictionaryBotHandlers:
             await message.answer(texts.ADMIN_BROADCAST_DAYS_ERROR_TEXT)
             return
         days = int(raw_days)
+        recipients = await self._collect_broadcast_recipients(BroadcastAudience.ACTIVE_DAYS, days)
+        if not recipients:
+            await state.clear()
+            await message.answer(
+                texts.ADMIN_BROADCAST_NO_RECIPIENTS_TEXT,
+                reply_markup=self._admin_root_markup(),
+            )
+            return
         await state.update_data(
             admin_broadcast_audience=BroadcastAudience.ACTIVE_DAYS.value,
             admin_broadcast_days=days,
+            admin_broadcast_recipient_count=len(recipients),
         )
         await state.set_state(AdminBroadcastFlow.confirm)
         data = await state.get_data()
@@ -514,9 +536,12 @@ class DictionaryBotHandlers:
                 str(data.get("admin_broadcast_text", "")),
                 BroadcastAudience.ACTIVE_DAYS,
                 days,
+                len(recipients),
+                str(data.get("admin_broadcast_content_label") or "сообщение"),
             ),
             reply_markup=self._broadcast_confirm_markup(),
         )
+        await self._copy_broadcast_preview_from_state(message.chat.id, data)
 
     async def _handle_admin_entry_input(self, message: Message, state: FSMContext) -> None:
         if not self._is_admin(message.chat.id):
@@ -739,7 +764,16 @@ class DictionaryBotHandlers:
             await state.set_state(AdminBroadcastFlow.days)
             await message.answer(texts.ADMIN_BROADCAST_DAYS_PROMPT)
             return
+        recipients = await self._collect_broadcast_recipients(audience, None)
+        if not recipients:
+            await state.clear()
+            await message.answer(
+                texts.ADMIN_BROADCAST_NO_RECIPIENTS_TEXT,
+                reply_markup=self._admin_root_markup(),
+            )
+            return
         await state.update_data(admin_broadcast_audience=audience.value, admin_broadcast_days=None)
+        await state.update_data(admin_broadcast_recipient_count=len(recipients))
         await state.set_state(AdminBroadcastFlow.confirm)
         state_data = await state.get_data()
         await message.answer(
@@ -747,15 +781,20 @@ class DictionaryBotHandlers:
                 str(state_data.get("admin_broadcast_text", "")),
                 audience,
                 None,
+                len(recipients),
+                str(state_data.get("admin_broadcast_content_label") or "сообщение"),
             ),
             reply_markup=self._broadcast_confirm_markup(),
         )
+        await self._copy_broadcast_preview_from_state(message.chat.id, state_data)
 
     async def _send_broadcast(self, chat_id: int, state: FSMContext) -> None:
         data = await state.get_data()
         broadcast_text = str(data.get("admin_broadcast_text") or "").strip()
+        source_chat_id = data.get("admin_broadcast_source_chat_id")
+        message_id = data.get("admin_broadcast_message_id")
         audience_raw = data.get("admin_broadcast_audience")
-        if not broadcast_text or audience_raw is None:
+        if audience_raw is None or source_chat_id is None or message_id is None:
             await state.clear()
             await self._bot.send_message(
                 chat_id,
@@ -781,7 +820,12 @@ class DictionaryBotHandlers:
         errors = 0
         for recipient in recipients:
             try:
-                await self._bot.send_message(recipient.chat_id, broadcast_text)
+                await self._deliver_broadcast_message(
+                    recipient_chat_id=recipient.chat_id,
+                    source_chat_id=int(source_chat_id),
+                    message_id=int(message_id),
+                    fallback_text=broadcast_text,
+                )
                 success += 1
             except TelegramForbiddenError:
                 blocked += 1
@@ -1051,12 +1095,6 @@ class DictionaryBotHandlers:
                         callback_data="admin:broadcast:audience:active_days",
                     ),
                 ],
-                [
-                    InlineKeyboardButton(
-                        text="Писавшим боту",
-                        callback_data="admin:broadcast:audience:with_actions",
-                    )
-                ],
                 [InlineKeyboardButton(text="Отмена", callback_data="admin:broadcast:cancel")],
             ]
         )
@@ -1067,7 +1105,7 @@ class DictionaryBotHandlers:
                 [
                     InlineKeyboardButton(text="Отправить", callback_data="admin:broadcast:send"),
                     InlineKeyboardButton(
-                        text="Изменить текст",
+                        text="Изменить сообщение",
                         callback_data="admin:broadcast:edit",
                     ),
                 ],
@@ -1230,10 +1268,12 @@ class DictionaryBotHandlers:
         return prompts.get(field_name, texts.ADMIN_STATE_MISSING_TEXT)
 
     @staticmethod
-    def _build_broadcast_preview(text_value: str) -> str:
+    def _build_broadcast_preview(text_value: str, content_label: str) -> str:
+        text_block = text_value or "Без подписи"
         return (
             f"{texts.ADMIN_BROADCAST_PREVIEW_TITLE}\n\n"
-            f"{text_value}\n\n"
+            f"Контент: {content_label}\n"
+            f"Текст: {text_block}\n\n"
             f"{texts.ADMIN_BROADCAST_AUDIENCE_PROMPT}"
         )
 
@@ -1242,13 +1282,22 @@ class DictionaryBotHandlers:
         text_value: str,
         audience: BroadcastAudience,
         days: int | None,
+        recipients_count: int,
+        content_label: str,
     ) -> str:
         audience_label = {
-            BroadcastAudience.ALL: "все пользователи",
+            BroadcastAudience.ALL: "все пользователи бота",
             BroadcastAudience.ACTIVE_DAYS: f"активные за {days} дн.",
             BroadcastAudience.WITH_ACTIONS: "все, кто писал боту",
         }[audience]
-        return f"{texts.ADMIN_BROADCAST_CONFIRM_TITLE}\nАудитория: {audience_label}\n\n{text_value}"
+        text_block = text_value or "Без подписи"
+        return (
+            f"{texts.ADMIN_BROADCAST_CONFIRM_TITLE}\n"
+            f"Аудитория: {audience_label}\n"
+            f"Адресатов: {recipients_count}\n"
+            f"Контент: {content_label}\n\n"
+            f"{text_block}"
+        )
 
     @staticmethod
     def _build_broadcast_report(success: int, blocked: int, errors: int) -> str:
@@ -1269,8 +1318,9 @@ class DictionaryBotHandlers:
     ) -> str:
         lines: list[str] = []
         if entry_id is not None:
-            lines.append(f"#{entry_id}")
-        lines.append(entry.title)
+            lines.append(f"#{entry_id} · {entry.title}")
+        else:
+            lines.append(entry.title)
         lines.append(f"Автор: {cls._format_admin_user(author, entry)}")
         lines.append(f"Дата: {added_at}")
         if compact:
@@ -1291,13 +1341,14 @@ class DictionaryBotHandlers:
     ) -> str:
         lines: list[str] = []
         if comment_id is not None:
-            lines.append(f"#{comment_id}")
-        lines.append(f"Статья: {entry_title}")
+            lines.append(f"#{comment_id} · {entry_title}")
+        else:
+            lines.append(f"Статья: {entry_title}")
         if entry_id is not None:
             lines.append(f"ID статьи: {entry_id}")
         lines.append(f"Автор: {cls._format_admin_user(author)}")
         lines.append(f"Дата: {created_at}")
-        lines.append(f"Комментарий: {comment_text}")
+        lines.append(f"Комментарий: {DictionaryBotHandlers._truncate_text(comment_text, 180)}")
         return "\n".join(lines)
 
     @classmethod
@@ -1379,6 +1430,75 @@ class DictionaryBotHandlers:
         if secondary:
             parts.append(f"автор: {secondary}")
         return "Фильтры: " + "; ".join(parts) if parts else "Фильтры: нет"
+
+    @staticmethod
+    def _supports_broadcast_message(message: Message) -> bool:
+        return bool(message.text or message.caption or message.photo or message.document)
+
+    @staticmethod
+    def _extract_broadcast_text(message: Message) -> str:
+        return (message.text or message.caption or "").strip()
+
+    @staticmethod
+    def _describe_broadcast_content(message: Message) -> str:
+        if message.photo:
+            return "фото"
+        if message.document:
+            return "файл"
+        return "текст"
+
+    async def _copy_broadcast_preview_from_state(self, chat_id: int, data: dict[str, Any]) -> None:
+        source_chat_id = data.get("admin_broadcast_source_chat_id")
+        message_id = data.get("admin_broadcast_message_id")
+        if source_chat_id is None or message_id is None:
+            return
+        await self._copy_broadcast_preview(
+            chat_id=chat_id,
+            source_chat_id=int(source_chat_id),
+            message_id=int(message_id),
+        )
+
+    async def _copy_broadcast_preview(
+        self,
+        chat_id: int,
+        source_chat_id: int,
+        message_id: int,
+    ) -> None:
+        try:
+            await self._bot.copy_message(
+                chat_id=chat_id,
+                from_chat_id=source_chat_id,
+                message_id=message_id,
+            )
+        except TelegramBadRequest:
+            logger.exception("Failed to copy broadcast preview")
+
+    async def _deliver_broadcast_message(
+        self,
+        recipient_chat_id: int,
+        source_chat_id: int,
+        message_id: int,
+        fallback_text: str,
+    ) -> None:
+        try:
+            await self._bot.copy_message(
+                chat_id=recipient_chat_id,
+                from_chat_id=source_chat_id,
+                message_id=message_id,
+            )
+            return
+        except TelegramBadRequest:
+            if not fallback_text:
+                raise
+
+        await self._bot.send_message(recipient_chat_id, fallback_text)
+
+    @staticmethod
+    def _truncate_text(value: str, limit: int) -> str:
+        clean = " ".join(value.split())
+        if len(clean) <= limit:
+            return clean
+        return clean[: limit - 1].rstrip() + "…"
 
     @staticmethod
     def _format_datetime(value: datetime | str) -> str:

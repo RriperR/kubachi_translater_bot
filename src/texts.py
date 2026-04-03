@@ -90,17 +90,22 @@ ADMIN_CANCELLED_TEXT = "Действие отменено."
 ADMIN_STATE_MISSING_TEXT = "Не удалось продолжить сценарий админки. Начните заново через /admin."
 
 ADMIN_BROADCAST_TEXT_PROMPT = (
-    "Пришлите текст промо-рассылки одним сообщением. "
+    "Пришлите сообщение для промо-рассылки одним сообщением. "
+    "Можно отправить текст, фото с подписью или файл с подписью. "
     "После этого я покажу превью и дам выбрать аудиторию."
 )
 ADMIN_BROADCAST_EMPTY_TEXT = "Текст рассылки не должен быть пустым."
-ADMIN_BROADCAST_PREVIEW_TITLE = "Превью рассылки:"
+ADMIN_BROADCAST_UNSUPPORTED_TEXT = (
+    "Поддерживаются текст, фото с подписью или файл с подписью. "
+    "Попробуйте отправить рассылку одним сообщением."
+)
+ADMIN_BROADCAST_PREVIEW_TITLE = "Превью рассылки"
 ADMIN_BROADCAST_AUDIENCE_PROMPT = "Выберите аудиторию рассылки:"
 ADMIN_BROADCAST_DAYS_PROMPT = (
     "Введите число дней активности. Рассылка уйдет тем, кто писал боту за этот период."
 )
 ADMIN_BROADCAST_DAYS_ERROR_TEXT = "Нужно ввести положительное число дней."
-ADMIN_BROADCAST_CONFIRM_TITLE = "Подтвердите рассылку."
+ADMIN_BROADCAST_CONFIRM_TITLE = "Подтвердите рассылку"
 ADMIN_BROADCAST_SENT_TEXT = "Рассылка завершена."
 ADMIN_BROADCAST_NO_RECIPIENTS_TEXT = "Для выбранного сегмента нет адресатов."
 ADMIN_BROADCAST_REPORT_TEXT = (
