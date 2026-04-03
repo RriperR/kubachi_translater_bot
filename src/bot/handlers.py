@@ -252,7 +252,7 @@ class DictionaryBotHandlers:
             await asyncio.to_thread(self._user_repository.append_user_entry, submission)
             await asyncio.to_thread(
                 self._db_repository.log_action,
-                f'ADD "{submission.word} - {submission.translation}"',
+                f"/add saved: {submission.word} - {submission.translation}",
                 message.chat.id,
             )
             await message.answer(texts.ADD_SUCCESS_TEXT)
@@ -337,7 +337,11 @@ class DictionaryBotHandlers:
                     suggestion_id,
                 )
             )
-            await asyncio.to_thread(self._db_repository.log_action, "SUGGEST", message.chat.id)
+            await asyncio.to_thread(
+                self._db_repository.log_action,
+                "/suggest sent",
+                message.chat.id,
+            )
             await message.answer(texts.SUGGEST_SUCCESS_TEXT)
         except Exception as exc:  # pragma: no cover
             await self._handle_failure(message.chat.id, exc)

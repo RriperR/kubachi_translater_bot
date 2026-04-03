@@ -17,7 +17,7 @@ from models import AdminStats, AdminSuggestion, SearchMode, TelegramUser, UserPr
 class PostgresRepository:
     """Репозиторий для работы с таблицами приложения в PostgreSQL."""
 
-    _EXPECTED_SCHEMA_REVISION = "20260403_0005"
+    _EXPECTED_SCHEMA_REVISION = "20260403_0006"
 
     def __init__(self, config: DatabaseConfig) -> None:
         """Сохранить параметры подключения к базе данных.
@@ -138,7 +138,7 @@ class PostgresRepository:
         """
         action_text = action.strip()[:1024]
         resolved_action_type = action_type or (
-            "command" if action_text.startswith("/") else "generic"
+            "command" if action_text.startswith("/") else "search"
         )
         now_utc = datetime.now(timezone.utc)
         now_local = self._utc_plus_three_now()
