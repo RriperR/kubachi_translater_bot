@@ -57,7 +57,8 @@ DB_PORT=5432
 DB_USER=bot
 DB_PASSWORD=secret007
 DB_NAME=kubachi_db
-ADMIN_CHAT_ID=-1000000000000
+LOGS_CHAT_ID=-1000000000000
+ADMINS_CHAT_IDS=123456789,987654321
 RAG_ENABLED=true
 RAG_TOP_K=5
 RAG_MAX_DISTANCE=0.65
@@ -67,6 +68,10 @@ RAG_EMBEDDING_DIMENSIONS=384
 RAG_EMBEDDING_BATCH_SIZE=64
 RAG_EMBEDDING_DEVICE=cpu
 ```
+
+Где:
+- `LOGS_CHAT_ID` — чат или группа, куда бот отправляет служебные уведомления и предложения из `/suggest`;
+- `ADMINS_CHAT_IDS` — список `chat_id` админов через запятую, которым доступна `/admin`.
 
 ## Локальный запуск
 

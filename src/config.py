@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseModel, ConfigDict, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -34,7 +36,8 @@ class AppConfig(BaseSettings):
     )
 
     bot_token: SecretStr
-    admin_chat_id: int | None = None
+    logs_chat_id: int | None = None
+    admins_chat_ids: Annotated[tuple[int, ...], NoDecode] = ()
     db_host: str
     db_port: int
     db_user: str
@@ -49,6 +52,51 @@ class AppConfig(BaseSettings):
     rag_embedding_dimensions: int = 384
     rag_embedding_batch_size: int = 64
     rag_embedding_device: str = "cpu"
+
+    @field_validator("admins_chat_ids", mode="before")
+    @classmethod
+    def _parse_admins_chat_ids(cls, value: object) -> tuple[int, ...]:
+        """Преобразовать список админов из env в кортеж chat_id.
+
+        Args:
+            value: Сырое значение из переменной окружения.
+
+        Returns:
+            Кортеж chat_id администраторов.
+        """
+        if value is None or value == "":
+            return ()
+        if isinstance(value, tuple):
+            return tuple(int(item) for item in value)
+        if isinstance(value, list):
+            return tuple(int(item) for item in value)
+        if isinstance(value, str):
+            parts = [part.strip() for part in value.split(",") if part.strip()]
+            return tuple(int(part) for part in parts)
+        return (int(str(value)),)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_legacy_logs_chat_alias(cls, data: object) -> object:
+        """Поддержать старое имя переменной для чата логов.
+
+        Args:
+            data: Сырые входные данные до валидации настроек.
+
+        Returns:
+            Обновленные входные данные с подставленным legacy alias при необходимости.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        if "logs_chat_id" in data or "LOGS_CHAT_ID" in data:
+            return data
+
+        legacy_value = os.getenv("ADMIN_CHAT_ID")
+        if legacy_value is None or legacy_value == "":
+            return data
+
+        return {**data, "logs_chat_id": int(legacy_value)}
 
     @property
     def database(self) -> DatabaseConfig:

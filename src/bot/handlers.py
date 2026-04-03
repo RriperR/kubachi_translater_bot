@@ -294,7 +294,7 @@ class DictionaryBotHandlers:
 
     async def _handle_suggest_command(self, message: Message, state: FSMContext) -> None:
         await self._track_message(message, "/suggest")
-        if self._config.admin_chat_id is None:
+        if self._config.logs_chat_id is None:
             await message.answer(texts.SUGGEST_UNAVAILABLE_TEXT)
             return
 
@@ -721,10 +721,10 @@ class DictionaryBotHandlers:
         await self._bot.send_message(chat_id, user_message)
 
     async def _notify_admin(self, text: str) -> None:
-        if self._config.admin_chat_id is None:
+        if self._config.logs_chat_id is None:
             return
         try:
-            await self._bot.send_message(self._config.admin_chat_id, text)
+            await self._bot.send_message(self._config.logs_chat_id, text)
         except Exception:  # pragma: no cover
             logger.exception("Failed to notify admin")
 
@@ -1016,7 +1016,7 @@ class DictionaryBotHandlers:
         return None
 
     def _is_admin(self, chat_id: int) -> bool:
-        return self._config.admin_chat_id is not None and chat_id == self._config.admin_chat_id
+        return chat_id in self._config.admins_chat_ids
 
     @staticmethod
     def _format_actor(message: Message) -> str:
