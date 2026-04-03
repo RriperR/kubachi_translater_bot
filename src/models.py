@@ -179,3 +179,17 @@ class AdminStats:
     user_entries_count: int = 0
     comments_count: int = 0
     suggestions_count: int = 0
+
+
+@dataclass(frozen=True)
+class UserProfileStats:
+    """Краткая сводка по пользователю для команды `/me`."""
+
+    user: TelegramUser
+    mode: SearchMode
+    created_at: datetime
+    last_activity_at: datetime
+    searches_count: int = 0
+    user_entries_count: int = 0
+    comments_count: int = 0
+    suggestions_count: int = 0

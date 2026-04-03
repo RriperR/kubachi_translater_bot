@@ -29,6 +29,7 @@ from models import (
     DictionarySource,
     SearchMode,
     TelegramUser,
+    UserProfileStats,
     UserSubmittedEntry,
 )
 from normalization import normalize_kubachi_word
@@ -87,6 +88,7 @@ class DictionaryBotHandlers:
         router.message.register(self._handle_restart, Command("restart"))
         router.message.register(self._handle_help, Command("help"))
         router.message.register(self._handle_info, Command("info"))
+        router.message.register(self._handle_me, Command("me"))
         router.message.register(self._handle_chat_id, Command("chatid"))
         router.message.register(self._handle_getdb, Command("getdb"))
         router.message.register(self._handle_admin_command, Command("admin"))
@@ -141,6 +143,19 @@ class DictionaryBotHandlers:
     async def _handle_info(self, message: Message) -> None:
         await self._track_message(message, "/info")
         await message.answer(texts.INFO_TEXT)
+
+    async def _handle_me(self, message: Message) -> None:
+        await self._track_message(message, "/me")
+        actor = self._extract_actor(message)
+        await asyncio.to_thread(self._db_repository.ensure_user, actor)
+        profile = await asyncio.to_thread(
+            self._db_repository.fetch_user_profile_stats,
+            actor.chat_id,
+        )
+        if profile is None:
+            await message.answer(texts.ME_EMPTY_TEXT)
+            return
+        await message.answer(self._build_user_profile_summary(profile))
 
     async def _handle_chat_id(self, message: Message) -> None:
         await message.answer(f"Ваш chat_id: {message.chat.id}")
@@ -1557,4 +1572,36 @@ class DictionaryBotHandlers:
             f"{prefix} от "
             f'{username} "{full_name or actor.first_name}" (chat_id={actor.chat_id}):\n\n'
             f"{suggestion_text}"
+        )
+
+    @classmethod
+    def _build_user_profile_summary(cls, profile: UserProfileStats) -> str:
+        """Собрать личную сводку пользователя для команды `/me`.
+
+        Args:
+            profile: Сводка по пользователю из базы данных.
+
+        Returns:
+            Готовый текст профиля пользователя.
+        """
+        username = f"@{profile.user.username}" if profile.user.username else "не указан"
+        full_name = (
+            " ".join(
+                part for part in (profile.user.first_name, profile.user.last_name) if part
+            ).strip()
+            or "без имени"
+        )
+        mode_label = "расширенный" if profile.mode == SearchMode.COMPLEX else "точный"
+        return (
+            f"{texts.ME_TITLE_TEXT}\n\n"
+            f"Имя: {full_name}\n"
+            f"Username: {username}\n"
+            f"chat_id: {profile.user.chat_id}\n"
+            f"Режим поиска: {mode_label}\n"
+            f"Вы с ботом: {cls._format_datetime(profile.created_at)}\n"
+            f"Последняя активность: {cls._format_datetime(profile.last_activity_at)}\n\n"
+            f"Поисков: {profile.searches_count}\n"
+            f"Добавленных статей: {profile.user_entries_count}\n"
+            f"Комментариев: {profile.comments_count}\n"
+            f"Предложений: {profile.suggestions_count}"
         )

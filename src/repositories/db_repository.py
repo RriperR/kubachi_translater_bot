@@ -11,7 +11,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from config import DatabaseConfig
-from models import AdminStats, AdminSuggestion, SearchMode, TelegramUser
+from models import AdminStats, AdminSuggestion, SearchMode, TelegramUser, UserProfileStats
 
 
 class PostgresRepository:
@@ -384,6 +384,89 @@ class PostgresRepository:
             total_searches=total_searches,
             top_queries=top_queries,
             failed_queries=failed_queries,
+            user_entries_count=user_entries_count,
+            comments_count=comments_count,
+            suggestions_count=suggestions_count,
+        )
+
+    def fetch_user_profile_stats(self, chat_id: int) -> UserProfileStats | None:
+        """Собрать краткую персональную статистику пользователя.
+
+        Args:
+            chat_id: Идентификатор Telegram-чата пользователя.
+
+        Returns:
+            Сводка по пользователю или `None`, если запись не найдена.
+        """
+        with (
+            self._connect() as connection,
+            connection.cursor(cursor_factory=RealDictCursor) as cursor,
+        ):
+            cursor.execute(
+                """
+                SELECT id, chatid, username, firstname, lastname, mode, created_at, updated_at
+                FROM users
+                WHERE chatid = %s
+                """,
+                (str(chat_id),),
+            )
+            user_row = cursor.fetchone()
+            if user_row is None:
+                return None
+
+            user_id = int(user_row["id"])
+            searches_count = self._scalar(
+                cursor,
+                """
+                SELECT COUNT(*)
+                FROM actions
+                WHERE fk_user = %s
+                  AND (action LIKE 'SEARCH:%%' OR action LIKE 'NOTFOUND:%%')
+                """,
+                (user_id,),
+            )
+            suggestions_count = self._scalar(
+                cursor,
+                "SELECT COUNT(*) FROM suggestions WHERE fk_user = %s",
+                (user_id,),
+            )
+            user_entries_count = self._scalar(
+                cursor,
+                """
+                SELECT COUNT(*)
+                FROM dictionary_entries AS entries
+                JOIN dictionary_contributors AS contributors
+                  ON contributors.id = entries.contributor_id
+                WHERE entries.source = 'user'
+                  AND contributors.chat_id = %s
+                """,
+                (chat_id,),
+            )
+            comments_count = self._scalar(
+                cursor,
+                """
+                SELECT COUNT(*)
+                FROM dictionary_entry_comments AS comments
+                JOIN dictionary_contributors AS contributors
+                  ON contributors.id = comments.contributor_id
+                WHERE contributors.chat_id = %s
+                """,
+                (chat_id,),
+            )
+
+        return UserProfileStats(
+            user=TelegramUser(
+                chat_id=int(str(user_row["chatid"])),
+                username=(
+                    str(user_row["username"]) if user_row.get("username") is not None else None
+                ),
+                first_name=str(user_row.get("firstname") or ""),
+                last_name=str(user_row.get("lastname") or ""),
+            ),
+            mode=SearchMode.from_value(user_row.get("mode")),
+            created_at=user_row["created_at"],
+            last_activity_at=user_row["updated_at"],
+            searches_count=searches_count,
             user_entries_count=user_entries_count,
             comments_count=comments_count,
             suggestions_count=suggestions_count,
