@@ -19,3 +19,9 @@ class CommentFlow(StatesGroup):
     """Состояние диалога для добавления комментария."""
 
     text = State()
+
+
+class SuggestionFlow(StatesGroup):
+    """Состояние диалога для отправки идеи или предложения."""
+
+    text = State()

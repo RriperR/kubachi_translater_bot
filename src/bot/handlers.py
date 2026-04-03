@@ -25,7 +25,7 @@ from services.search import format_entry
 from services.session_store import SessionStore
 
 from .bootstrap import DictionaryRuntime
-from .flows import AddEntryFlow, CommentFlow
+from .flows import AddEntryFlow, CommentFlow, SuggestionFlow
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,8 @@ class DictionaryBotHandlers:
         router.message.register(self._handle_getdb, Command("getdb"))
         router.message.register(self._handle_add_command, Command("add"))
         router.message.register(self._handle_comment_command, Command("comment"))
+        router.message.register(self._handle_suggest_command, Command("suggest"))
+        router.message.register(self._handle_suggest_command, Command("idea"))
         router.message.register(self._handle_mode_command, Command("mode"))
 
         router.message.register(self._handle_add_word, AddEntryFlow.word)
@@ -79,6 +81,7 @@ class DictionaryBotHandlers:
         router.message.register(self._handle_add_supporting, AddEntryFlow.supporting)
         router.message.register(self._handle_add_confirm, AddEntryFlow.confirm)
         router.message.register(self._handle_comment_text, CommentFlow.text)
+        router.message.register(self._handle_suggestion_text, SuggestionFlow.text)
 
         router.callback_query.register(self._handle_mode_callback, F.data.startswith("mode:"))
         router.callback_query.register(self._handle_page_callback, F.data.startswith("page:"))
@@ -249,6 +252,36 @@ class DictionaryBotHandlers:
             await message.answer(
                 texts.COMMENT_SUCCESS_TEXT if updated else texts.COMMENT_NOT_FOUND_TEXT
             )
+        except Exception as exc:  # pragma: no cover
+            await self._handle_failure(message.chat.id, exc)
+        finally:
+            await state.clear()
+
+    async def _handle_suggest_command(self, message: Message, state: FSMContext) -> None:
+        await self._track_message(message, "/suggest")
+        if self._config.admin_chat_id is None:
+            await message.answer(texts.SUGGEST_UNAVAILABLE_TEXT)
+            return
+
+        await state.clear()
+        await state.set_state(SuggestionFlow.text)
+        await message.answer(texts.SUGGEST_PROMPT_TEXT)
+
+    async def _handle_suggestion_text(self, message: Message, state: FSMContext) -> None:
+        suggestion_text = (message.text or "").strip()
+        if not suggestion_text:
+            await message.answer(texts.SUGGEST_EMPTY_TEXT)
+            return
+
+        try:
+            await self._notify_admin(
+                self._build_suggestion_notification(
+                    self._extract_actor(message),
+                    suggestion_text,
+                )
+            )
+            await asyncio.to_thread(self._db_repository.log_action, "SUGGEST", message.chat.id)
+            await message.answer(texts.SUGGEST_SUCCESS_TEXT)
         except Exception as exc:  # pragma: no cover
             await self._handle_failure(message.chat.id, exc)
         finally:
@@ -441,3 +474,22 @@ class DictionaryBotHandlers:
             return str(message.chat.id)
         username = f"@{from_user.username}" if from_user.username else str(message.chat.id)
         return f'{username} "{from_user.first_name}"'
+
+    @staticmethod
+    def _build_suggestion_notification(actor: TelegramUser, suggestion_text: str) -> str:
+        """Собрать уведомление администратору о новом предложении.
+
+        Args:
+            actor: Пользователь, отправивший предложение.
+            suggestion_text: Текст идеи или замечания.
+
+        Returns:
+            Готовое текстовое уведомление для администратора.
+        """
+        username = f"@{actor.username}" if actor.username else str(actor.chat_id)
+        full_name = " ".join(part for part in (actor.first_name, actor.last_name) if part).strip()
+        return (
+            "Новое предложение от "
+            f'{username} "{full_name or actor.first_name}" (chat_id={actor.chat_id}):\n\n'
+            f"{suggestion_text}"
+        )
