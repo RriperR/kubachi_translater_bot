@@ -25,3 +25,34 @@ class SuggestionFlow(StatesGroup):
     """Состояние диалога для отправки идеи или предложения."""
 
     text = State()
+
+
+class AdminBroadcastFlow(StatesGroup):
+    """Состояния админской рассылки."""
+
+    days = State()
+    text = State()
+    confirm = State()
+
+
+class AdminEntriesFlow(StatesGroup):
+    """Состояния просмотра и редактирования пользовательских статей."""
+
+    filter_value = State()
+    browse = State()
+    edit_value = State()
+    delete_confirm = State()
+
+
+class AdminCommentsFlow(StatesGroup):
+    """Состояния просмотра комментариев."""
+
+    filter_value = State()
+    browse = State()
+    delete_confirm = State()
+
+
+class AdminSuggestionsFlow(StatesGroup):
+    """Состояния просмотра пользовательских предложений."""
+
+    browse = State()

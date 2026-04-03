@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 
 
@@ -32,6 +33,14 @@ class DictionarySource(str, Enum):
 
     CORE = "core"
     USER = "user"
+
+
+class BroadcastAudience(str, Enum):
+    """Сегмент аудитории для промо-рассылки."""
+
+    ALL = "all"
+    ACTIVE_DAYS = "active_days"
+    WITH_ACTIONS = "with_actions"
 
 
 @dataclass(frozen=True)
@@ -118,3 +127,55 @@ class ChatSession:
     """Сессионные данные чата для пагинации результатов."""
 
     pending_results: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AdminSuggestion:
+    """Предложение пользователя для админки."""
+
+    suggestion_id: int
+    text: str
+    created_at: datetime
+    status: str
+    author: TelegramUser
+
+
+@dataclass(frozen=True)
+class AdminUserEntryRecord:
+    """Пользовательская словарная статья с метаданными автора."""
+
+    entry_id: int
+    entry: DictionaryEntry
+    created_at: datetime
+    author: TelegramUser | None
+
+
+@dataclass(frozen=True)
+class AdminCommentRecord:
+    """Комментарий к словарной статье с метаданными автора."""
+
+    comment_id: int
+    entry_id: int
+    entry_title: str
+    comment_text: str
+    created_at: datetime
+    author: TelegramUser | None
+
+
+@dataclass(frozen=True)
+class AdminStats:
+    """Сводная статистика для admin panel."""
+
+    total_users: int
+    new_users_day: int
+    new_users_week: int
+    new_users_month: int
+    active_users_day: int
+    active_users_week: int
+    active_users_month: int
+    total_searches: int
+    top_queries: tuple[tuple[str, int], ...] = ()
+    failed_queries: tuple[tuple[str, int], ...] = ()
+    user_entries_count: int = 0
+    comments_count: int = 0
+    suggestions_count: int = 0

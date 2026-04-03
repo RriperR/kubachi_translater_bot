@@ -251,7 +251,7 @@ def upgrade() -> None:
         """
     )
     op.execute(
-        fr"""
+        rf"""
         CREATE TABLE IF NOT EXISTS dictionary_chunk_embeddings (
             chunk_id BIGINT PRIMARY KEY
                 REFERENCES dictionary_entry_chunks(id) ON DELETE CASCADE,

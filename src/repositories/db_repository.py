@@ -409,7 +409,12 @@ class PostgresRepository:
             return SearchMode.from_value(user.get("mode"))
 
     def update_user_mode(self, chat_id: int, mode: SearchMode) -> None:
-        """Обновить режим поиска пользователя."""
+        """Обновить режим поиска пользователя.
+
+        Args:
+            chat_id: Идентификатор Telegram-чата пользователя.
+            mode: Новый режим поиска.
+        """
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
