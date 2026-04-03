@@ -617,8 +617,14 @@ class DictionaryBotHandlers:
         markup = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="Простой", callback_data="mode:lite"),
-                    InlineKeyboardButton(text="Комплексный", callback_data="mode:complex"),
+                    InlineKeyboardButton(
+                        text=texts.MODE_LITE_BUTTON_TEXT,
+                        callback_data="mode:lite",
+                    ),
+                    InlineKeyboardButton(
+                        text=texts.MODE_COMPLEX_BUTTON_TEXT,
+                        callback_data="mode:complex",
+                    ),
                 ]
             ]
         )
