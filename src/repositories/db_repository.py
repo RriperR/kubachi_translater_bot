@@ -17,7 +17,7 @@ from models import AdminStats, AdminSuggestion, SearchMode, TelegramUser, UserPr
 class PostgresRepository:
     """Репозиторий для работы с таблицами приложения в PostgreSQL."""
 
-    _EXPECTED_SCHEMA_REVISION = "20260403_0003"
+    _EXPECTED_SCHEMA_REVISION = "20260403_0004"
 
     def __init__(self, config: DatabaseConfig) -> None:
         """Сохранить параметры подключения к базе данных.
@@ -122,14 +122,29 @@ class PostgresRepository:
                 )
             connection.commit()
 
-    def log_action(self, action: str, chat_id: int) -> None:
+    def log_action(
+        self,
+        action: str,
+        chat_id: int,
+        *,
+        action_type: str | None = None,
+        action_query: str | None = None,
+        search_found: bool | None = None,
+    ) -> None:
         """Сохранить действие пользователя в журнале.
 
         Args:
             action: Текст действия для журнала.
             chat_id: Идентификатор чата пользователя.
+            action_type: Структурированный тип действия.
+            action_query: Текст поискового запроса, если действие связано с поиском.
+            search_found: Признак того, были ли результаты у поискового запроса.
         """
         action_text = action.strip()[:1024]
+        resolved_action_type = action_type or (
+            "command" if action_text.startswith("/") else "generic"
+        )
+        query_text = action_query.strip()[:1024] if action_query and action_query.strip() else None
         now_utc = datetime.now(timezone.utc)
         now_local = self._utc_plus_three_now()
         with self._connect() as connection:
@@ -140,11 +155,22 @@ class PostgresRepository:
                     return
                 cursor.execute(
                     """
-                    INSERT INTO actions (action, date_time, created_at, fk_user)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO actions (
+                        action,
+                        action_type,
+                        action_query,
+                        search_found,
+                        date_time,
+                        created_at,
+                        fk_user
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         action_text,
+                        resolved_action_type,
+                        query_text,
+                        search_found,
                         now_local.isoformat(sep=" ", timespec="seconds"),
                         now_utc,
                         user["id"],
@@ -168,8 +194,13 @@ class PostgresRepository:
             chat_id: Идентификатор чата пользователя.
             found: `True`, если по запросу были результаты.
         """
-        prefix = "SEARCH" if found else "NOTFOUND"
-        self.log_action(f"{prefix}: {query}", chat_id)
+        self.log_action(
+            query,
+            chat_id,
+            action_type="search",
+            action_query=query,
+            search_found=found,
+        )
 
     def insert_suggestion(self, user: TelegramUser, text: str) -> int:
         """Сохранить пользовательское предложение в базе данных.
@@ -360,12 +391,11 @@ class PostgresRepository:
                 """
                 SELECT COUNT(*)
                 FROM actions
-                WHERE action LIKE 'SEARCH:%'
-                   OR action LIKE 'NOTFOUND:%'
+                WHERE action_type = 'search'
                 """,
             )
-            top_queries = self._fetch_query_stats(cursor, "SEARCH:%")
-            failed_queries = self._fetch_query_stats(cursor, "NOTFOUND:%")
+            top_queries = self._fetch_query_stats(cursor, search_found=True)
+            failed_queries = self._fetch_query_stats(cursor, search_found=False)
             user_entries_count = self._scalar(
                 cursor,
                 "SELECT COUNT(*) FROM dictionary_entries WHERE source = 'user'",
@@ -421,7 +451,7 @@ class PostgresRepository:
                 SELECT COUNT(*)
                 FROM actions
                 WHERE fk_user = %s
-                  AND (action LIKE 'SEARCH:%%' OR action LIKE 'NOTFOUND:%%')
+                  AND action_type = 'search'
                 """,
                 (user_id,),
             )
@@ -565,17 +595,21 @@ class PostgresRepository:
         return int(row[0])
 
     @staticmethod
-    def _fetch_query_stats(cursor: Any, pattern: str) -> tuple[tuple[str, int], ...]:
+    def _fetch_query_stats(
+        cursor: Any,
+        search_found: bool,
+    ) -> tuple[tuple[str, int], ...]:
         cursor.execute(
             """
-            SELECT regexp_replace(action, '^[A-Z]+:\\s*', '') AS query, COUNT(*) AS hits
+            SELECT COALESCE(NULLIF(action_query, ''), action) AS query, COUNT(*) AS hits
             FROM actions
-            WHERE action LIKE %s
-            GROUP BY regexp_replace(action, '^[A-Z]+:\\s*', '')
+            WHERE action_type = 'search'
+              AND search_found IS NOT DISTINCT FROM %s
+            GROUP BY COALESCE(NULLIF(action_query, ''), action)
             ORDER BY hits DESC, query ASC
             LIMIT 10
             """,
-            (pattern,),
+            (search_found,),
         )
         rows = cursor.fetchall()
         return tuple((str(row["query"]), int(row["hits"])) for row in rows)
