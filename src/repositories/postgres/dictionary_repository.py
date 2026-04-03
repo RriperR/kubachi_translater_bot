@@ -12,6 +12,7 @@ from models import (
     AdminUserEntryRecord,
     DictionaryEntry,
     DictionarySource,
+    SearchMode,
     TelegramUser,
     UserSubmittedEntry,
 )
@@ -153,10 +154,10 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
             conditions.append(
                 """
                 (
-                    lower(COALESCE(contributors.username, '')) LIKE %s
-                    OR lower(COALESCE(contributors.first_name, '')) LIKE %s
-                    OR lower(COALESCE(contributors.last_name, '')) LIKE %s
-                    OR COALESCE(contributors.chat_id::text, '') LIKE %s
+                    lower(COALESCE(users.username, '')) LIKE %s
+                    OR lower(COALESCE(users.firstname, '')) LIKE %s
+                    OR lower(COALESCE(users.lastname, '')) LIKE %s
+                    OR COALESCE(users.chatid, '') LIKE %s
                 )
                 """
             )
@@ -177,12 +178,12 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
                 e.word,
                 e.translation,
                 e.created_at,
-                contributors.chat_id AS contributor_chat_id,
-                contributors.username AS contributor_username,
-                contributors.first_name AS contributor_first_name,
-                contributors.last_name AS contributor_last_name
+                users.chatid AS contributor_chat_id,
+                users.username AS contributor_username,
+                users.firstname AS contributor_first_name,
+                users.lastname AS contributor_last_name
             FROM dictionary_entries AS e
-            LEFT JOIN dictionary_contributors AS contributors ON contributors.id = e.contributor_id
+            LEFT JOIN users ON users.id = e.user_id
             WHERE __CONDITIONS__
             ORDER BY e.created_at DESC, e.id DESC
             LIMIT %s OFFSET %s
@@ -220,10 +221,9 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
                 """
                 SELECT
                     e.created_at,
-                    contributors.chat_id AS contributor_chat_id
+                    users.chatid AS contributor_chat_id
                 FROM dictionary_entries AS e
-                LEFT JOIN dictionary_contributors AS contributors
-                    ON contributors.id = e.contributor_id
+                LEFT JOIN users ON users.id = e.user_id
                 WHERE e.id = %s
                 """,
                 (entry_id,),
@@ -366,10 +366,10 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
             conditions.append(
                 """
                 (
-                    lower(COALESCE(contributors.username, '')) LIKE %s
-                    OR lower(COALESCE(contributors.first_name, '')) LIKE %s
-                    OR lower(COALESCE(contributors.last_name, '')) LIKE %s
-                    OR COALESCE(contributors.chat_id::text, '') LIKE %s
+                    lower(COALESCE(users.username, '')) LIKE %s
+                    OR lower(COALESCE(users.firstname, '')) LIKE %s
+                    OR lower(COALESCE(users.lastname, '')) LIKE %s
+                    OR COALESCE(users.chatid, '') LIKE %s
                 )
                 """
             )
@@ -390,14 +390,13 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
                 comments.created_at,
                 entries.word,
                 entries.translation,
-                contributors.chat_id AS contributor_chat_id,
-                contributors.username AS contributor_username,
-                contributors.first_name AS contributor_first_name,
-                contributors.last_name AS contributor_last_name
+                users.chatid AS contributor_chat_id,
+                users.username AS contributor_username,
+                users.firstname AS contributor_first_name,
+                users.lastname AS contributor_last_name
             FROM dictionary_entry_comments AS comments
             JOIN dictionary_entries AS entries ON entries.id = comments.entry_id
-            LEFT JOIN dictionary_contributors AS contributors
-                ON contributors.id = comments.contributor_id
+            LEFT JOIN users ON users.id = comments.user_id
             WHERE __CONDITIONS__
             ORDER BY comments.created_at DESC, comments.id DESC
             LIMIT %s OFFSET %s
@@ -474,12 +473,12 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
                 return False
 
             entry_id = int(row["id"])
-            contributor_id = self._ensure_contributor(cursor, author)
+            user_id = self._ensure_user_record(cursor, author)
             cursor.execute(
                 """
                 INSERT INTO dictionary_entry_comments (
                     entry_id,
-                    contributor_id,
+                    user_id,
                     text,
                     normalized_text
                 )
@@ -487,7 +486,7 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
                 """,
                 (
                     entry_id,
-                    contributor_id,
+                    user_id,
                     comment_line,
                     self._normalize_token_text(comment_line),
                 ),
@@ -500,56 +499,34 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
             connection.commit()
         return True
 
-    def _ensure_contributor(self, cursor: Any, contributor: TelegramUser) -> int:
-        return self._find_or_create_contributor(
-            cursor,
-            chat_id=contributor.chat_id,
-            username=contributor.username,
-            first_name=contributor.first_name,
-            last_name=contributor.last_name,
-        )
-
-    def _find_or_create_contributor(
+    def _find_existing_user_id(
         self,
         cursor: Any,
         chat_id: int | None,
         username: str | None,
         first_name: str,
         last_name: str,
-    ) -> int:
+    ) -> int | None:
         if chat_id is not None:
             cursor.execute(
                 """
                 SELECT id
-                FROM dictionary_contributors
-                WHERE chat_id = %s
+                FROM users
+                WHERE chatid = %s
                 """,
-                (chat_id,),
+                (str(chat_id),),
             )
             row = cursor.fetchone()
             if row is not None:
-                contributor_id = int(row["id"])
-                cursor.execute(
-                    """
-                    UPDATE dictionary_contributors
-                    SET username = %s,
-                        first_name = %s,
-                        last_name = %s,
-                        updated_at = NOW()
-                    WHERE id = %s
-                    """,
-                    (username, first_name, last_name, contributor_id),
-                )
-                return contributor_id
+                return int(row["id"])
 
         cursor.execute(
             """
             SELECT id
-            FROM dictionary_contributors
-            WHERE chat_id IS NULL
-              AND username IS NOT DISTINCT FROM %s
-              AND first_name = %s
-              AND last_name = %s
+            FROM users
+            WHERE username IS NOT DISTINCT FROM %s
+              AND firstname = %s
+              AND lastname = %s
             LIMIT 1
             """,
             (username, first_name, last_name),
@@ -557,23 +534,39 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
         row = cursor.fetchone()
         if row is not None:
             return int(row["id"])
+        return None
 
+    def _ensure_user_record(self, cursor: Any, user: TelegramUser) -> int:
         cursor.execute(
             """
-            INSERT INTO dictionary_contributors (
-                chat_id,
+            INSERT INTO users (
                 username,
-                first_name,
-                last_name
+                firstname,
+                lastname,
+                chatid,
+                mode,
+                created_at,
+                updated_at
             )
-            VALUES (%s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+            ON CONFLICT (chatid) DO UPDATE
+            SET username = EXCLUDED.username,
+                firstname = EXCLUDED.firstname,
+                lastname = EXCLUDED.lastname,
+                updated_at = NOW()
             RETURNING id
             """,
-            (chat_id, username, first_name, last_name),
+            (
+                user.username,
+                user.first_name,
+                user.last_name,
+                str(user.chat_id),
+                SearchMode.LITE.value,
+            ),
         )
         inserted = cursor.fetchone()
         if inserted is None:
-            raise RuntimeError("Не удалось создать автора словарной статьи")
+            raise RuntimeError("Не удалось создать или обновить автора словарной статьи")
         return int(inserted["id"])
 
     def _insert_entry(
@@ -582,7 +575,7 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
         entry: DictionaryEntry,
         chat_id: int | None = None,
     ) -> int | None:
-        contributor_id = self._resolve_entry_contributor_id(cursor, entry, chat_id)
+        user_id = self._resolve_entry_user_id(cursor, entry, chat_id)
         cursor.execute(
             """
             INSERT INTO dictionary_entries (
@@ -591,7 +584,7 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
                 translation,
                 normalized_word,
                 normalized_translation,
-                contributor_id
+                user_id
             )
             VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (source, word, translation) DO NOTHING
@@ -603,7 +596,7 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
                 entry.translation,
                 normalize_query(entry.word),
                 self._normalize_token_text(entry.translation),
-                contributor_id,
+                user_id,
             ),
         )
         inserted = cursor.fetchone()
@@ -611,7 +604,7 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
             return None
         return int(inserted["id"])
 
-    def _resolve_entry_contributor_id(
+    def _resolve_entry_user_id(
         self,
         cursor: Any,
         entry: DictionaryEntry,
@@ -623,7 +616,7 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
         if chat_id is None and username is None and first_name == "" and last_name == "":
             return None
 
-        return self._find_or_create_contributor(
+        return self._find_existing_user_id(
             cursor,
             chat_id=chat_id,
             username=username,
@@ -681,12 +674,12 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
 
         cursor.executemany(
             """
-            INSERT INTO dictionary_entry_comments (
-                entry_id,
-                contributor_id,
-                text,
-                normalized_text
-            )
+                INSERT INTO dictionary_entry_comments (
+                    entry_id,
+                    user_id,
+                    text,
+                    normalized_text
+                )
             VALUES (%s, NULL, %s, %s)
             """,
             [(entry_id, line, self._normalize_token_text(line)) for line in comment_lines],

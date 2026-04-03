@@ -213,10 +213,10 @@ class DictionaryAdminRepositoryMixin(
                 conditions.append(
                     """
                     (
-                        lower(COALESCE(contributors.username, '')) LIKE %s
-                        OR lower(COALESCE(contributors.first_name, '')) LIKE %s
-                        OR lower(COALESCE(contributors.last_name, '')) LIKE %s
-                        OR COALESCE(contributors.chat_id::text, '') LIKE %s
+                    lower(COALESCE(users.username, '')) LIKE %s
+                    OR lower(COALESCE(users.firstname, '')) LIKE %s
+                    OR lower(COALESCE(users.lastname, '')) LIKE %s
+                    OR COALESCE(users.chatid, '') LIKE %s
                     )
                     """
                 )
@@ -237,14 +237,13 @@ class DictionaryAdminRepositoryMixin(
                 comments.created_at,
                 entries.word,
                 entries.translation,
-                contributors.chat_id AS contributor_chat_id,
-                contributors.username AS contributor_username,
-                contributors.first_name AS contributor_first_name,
-                contributors.last_name AS contributor_last_name
+                users.chatid AS contributor_chat_id,
+                users.username AS contributor_username,
+                users.firstname AS contributor_first_name,
+                users.lastname AS contributor_last_name
             FROM dictionary_entry_comments AS comments
             JOIN dictionary_entries AS entries ON entries.id = comments.entry_id
-            LEFT JOIN dictionary_contributors AS contributors
-                ON contributors.id = comments.contributor_id
+            LEFT JOIN users ON users.id = comments.user_id
             WHERE __CONDITIONS__
             ORDER BY comments.created_at DESC, comments.id DESC
             LIMIT %s OFFSET %s
@@ -348,10 +347,10 @@ class DictionaryAdminRepositoryMixin(
                 conditions.append(
                     """
                     (
-                        lower(COALESCE(contributors.username, '')) LIKE %s
-                        OR lower(COALESCE(contributors.first_name, '')) LIKE %s
-                        OR lower(COALESCE(contributors.last_name, '')) LIKE %s
-                        OR COALESCE(contributors.chat_id::text, '') LIKE %s
+                    lower(COALESCE(users.username, '')) LIKE %s
+                    OR lower(COALESCE(users.firstname, '')) LIKE %s
+                    OR lower(COALESCE(users.lastname, '')) LIKE %s
+                    OR COALESCE(users.chatid, '') LIKE %s
                     )
                     """
                 )
@@ -402,16 +401,15 @@ class DictionaryAdminRepositoryMixin(
                 COALESCE(examples_agg.normalized_examples, '') AS normalized_examples,
                 COALESCE(notes_agg.normalized_notes, '') AS normalized_notes,
                 COALESCE(comments_agg.normalized_comments, '') AS normalized_comments,
-                contributors.chat_id AS contributor_chat_id,
-                contributors.username AS contributor_username,
-                contributors.first_name AS contributor_first_name,
-                contributors.last_name AS contributor_last_name
+                users.chatid AS contributor_chat_id,
+                users.username AS contributor_username,
+                users.firstname AS contributor_first_name,
+                users.lastname AS contributor_last_name
             FROM dictionary_entries AS e
             LEFT JOIN examples_agg ON examples_agg.entry_id = e.id
             LEFT JOIN notes_agg ON notes_agg.entry_id = e.id
             LEFT JOIN comments_agg ON comments_agg.entry_id = e.id
-            LEFT JOIN dictionary_contributors AS contributors
-                ON contributors.id = e.contributor_id
+            LEFT JOIN users ON users.id = e.user_id
             WHERE __CONDITIONS__
             ORDER BY e.created_at DESC, e.id DESC
             LIMIT %s OFFSET %s

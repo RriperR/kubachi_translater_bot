@@ -64,7 +64,6 @@ def test_schema_is_ready_and_core_tables_exist() -> None:
             WHERE table_schema = 'public'
               AND table_name IN (
                 'dictionary_entries',
-                'dictionary_contributors',
                 'dictionary_entry_examples',
                 'dictionary_entry_notes',
                 'dictionary_entry_comments',
@@ -73,7 +72,7 @@ def test_schema_is_ready_and_core_tables_exist() -> None:
               )
             """,
         )
-        == 7
+        == 6
     )
 
 

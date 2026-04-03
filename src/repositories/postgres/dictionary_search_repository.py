@@ -81,16 +81,14 @@ class DictionarySearchRepositoryMixin(PostgresRepositoryBase):
                 COALESCE(examples_agg.normalized_examples, '') AS normalized_examples,
                 COALESCE(notes_agg.normalized_notes, '') AS normalized_notes,
                 COALESCE(comments_agg.normalized_comments, '') AS normalized_comments,
-                e.contributor_id,
-                contributors.username AS contributor_username,
-                contributors.first_name AS contributor_first_name,
-                contributors.last_name AS contributor_last_name
+                users.username AS contributor_username,
+                users.firstname AS contributor_first_name,
+                users.lastname AS contributor_last_name
             FROM dictionary_entries AS e
             LEFT JOIN examples_agg ON examples_agg.entry_id = e.id
             LEFT JOIN notes_agg ON notes_agg.entry_id = e.id
             LEFT JOIN comments_agg ON comments_agg.entry_id = e.id
-            LEFT JOIN dictionary_contributors AS contributors
-                ON contributors.id = e.contributor_id
+            LEFT JOIN users ON users.id = e.user_id
         """
         query_filters = {
             "by_source": "WHERE e.source = %s",

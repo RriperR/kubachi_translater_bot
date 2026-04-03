@@ -17,7 +17,7 @@ from models import AdminStats, AdminSuggestion, SearchMode, TelegramUser, UserPr
 class PostgresRepository:
     """Репозиторий для работы с таблицами приложения в PostgreSQL."""
 
-    _EXPECTED_SCHEMA_REVISION = "20260403_0007"
+    _EXPECTED_SCHEMA_REVISION = "20260403_0008"
 
     def __init__(self, config: DatabaseConfig) -> None:
         """Сохранить параметры подключения к базе данных.
@@ -454,23 +454,21 @@ class PostgresRepository:
                 """
                 SELECT COUNT(*)
                 FROM dictionary_entries AS entries
-                JOIN dictionary_contributors AS contributors
-                  ON contributors.id = entries.contributor_id
+                JOIN users ON users.id = entries.user_id
                 WHERE entries.source = 'user'
-                  AND contributors.chat_id = %s
+                  AND users.chatid = %s
                 """,
-                (chat_id,),
+                (str(chat_id),),
             )
             comments_count = self._scalar(
                 cursor,
                 """
                 SELECT COUNT(*)
                 FROM dictionary_entry_comments AS comments
-                JOIN dictionary_contributors AS contributors
-                  ON contributors.id = comments.contributor_id
-                WHERE contributors.chat_id = %s
+                JOIN users ON users.id = comments.user_id
+                WHERE users.chatid = %s
                 """,
-                (chat_id,),
+                (str(chat_id),),
             )
 
         return UserProfileStats(
