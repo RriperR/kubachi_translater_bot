@@ -362,27 +362,15 @@ class PostgresRepository:
             )
             active_users_day = self._scalar(
                 cursor,
-                """
-                SELECT COUNT(DISTINCT fk_user)
-                FROM actions
-                WHERE created_at >= NOW() - INTERVAL '1 day'
-                """,
+                "SELECT COUNT(*) FROM users WHERE updated_at >= NOW() - INTERVAL '1 day'",
             )
             active_users_week = self._scalar(
                 cursor,
-                """
-                SELECT COUNT(DISTINCT fk_user)
-                FROM actions
-                WHERE created_at >= NOW() - INTERVAL '7 days'
-                """,
+                "SELECT COUNT(*) FROM users WHERE updated_at >= NOW() - INTERVAL '7 days'",
             )
             active_users_month = self._scalar(
                 cursor,
-                """
-                SELECT COUNT(DISTINCT fk_user)
-                FROM actions
-                WHERE created_at >= NOW() - INTERVAL '30 days'
-                """,
+                "SELECT COUNT(*) FROM users WHERE updated_at >= NOW() - INTERVAL '30 days'",
             )
             total_searches = self._scalar(
                 cursor,
