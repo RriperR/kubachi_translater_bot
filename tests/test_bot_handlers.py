@@ -50,14 +50,15 @@ def test_build_user_profile_summary_contains_main_fields() -> None:
         reference_dt=datetime(2026, 4, 10, 9, 0),
     )
 
-    assert "Ваш профиль" in summary
+    assert "👤 Ваш профиль" in summary
     assert "123456" in summary
-    assert "расширенный" in summary
+    assert "🔎 Режим поиска: расширенный" in summary
     assert "03.04.2026 (7 дней)" in summary
-    assert "14" in summary
-    assert "2" in summary
-    assert "3" in summary
-    assert "1" in summary
+    assert "Поисков: 14" in summary
+    assert "Статей добавлено: 2" in summary
+    assert "Комментариев: 3" in summary
+    assert "Предложений: 1" in summary
+    assert summary.strip().endswith("chat_id: 123456")
     assert "@tester" not in summary
     assert "Последняя активность" not in summary
 
@@ -78,10 +79,10 @@ def test_build_default_commands_contains_main_user_actions() -> None:
     ]
     assert [command.description for command in commands] == [
         "Начать заново",
-        "Краткая помощь",
+        "Что умеет бот",
         "Как пользоваться ботом",
-        "Выбрать режим поиска",
-        "Моя статистика",
+        "Настроить поиск",
+        "Мой профиль",
         "Предложить новый перевод",
         "Комментарий к статье",
         "Идея или замечание",

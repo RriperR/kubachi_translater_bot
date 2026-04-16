@@ -72,10 +72,10 @@ class DictionaryBotApp:
         """
         return [
             BotCommand(command="start", description="Начать заново"),
-            BotCommand(command="help", description="Краткая помощь"),
+            BotCommand(command="help", description="Что умеет бот"),
             BotCommand(command="info", description="Как пользоваться ботом"),
-            BotCommand(command="mode", description="Выбрать режим поиска"),
-            BotCommand(command="me", description="Моя статистика"),
+            BotCommand(command="mode", description="Настроить поиск"),
+            BotCommand(command="me", description="Мой профиль"),
             BotCommand(command="add", description="Предложить новый перевод"),
             BotCommand(command="comment", description="Комментарий к статье"),
             BotCommand(command="suggest", description="Идея или замечание"),

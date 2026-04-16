@@ -1297,8 +1297,8 @@ class DictionaryBotHandlers:
         text_block = text_value or "Без подписи"
         return (
             f"{texts.ADMIN_BROADCAST_PREVIEW_TITLE}\n\n"
-            f"Контент: {content_label}\n"
-            f"Текст: {text_block}\n\n"
+            f"Тип сообщения: {content_label}\n\n"
+            f"{text_block}\n\n"
             f"{texts.ADMIN_BROADCAST_AUDIENCE_PROMPT}"
         )
 
@@ -1317,10 +1317,10 @@ class DictionaryBotHandlers:
         }[audience]
         text_block = text_value or "Без подписи"
         return (
-            f"{texts.ADMIN_BROADCAST_CONFIRM_TITLE}\n"
+            f"{texts.ADMIN_BROADCAST_CONFIRM_TITLE}\n\n"
             f"Аудитория: {audience_label}\n"
             f"Адресатов: {recipients_count}\n"
-            f"Контент: {content_label}\n\n"
+            f"Тип сообщения: {content_label}\n\n"
             f"{text_block}"
         )
 
@@ -1346,8 +1346,8 @@ class DictionaryBotHandlers:
             lines.append(f"#{entry_id} · {entry.title}")
         else:
             lines.append(entry.title)
-        lines.append(f"Автор: {cls._format_admin_user(author, entry)}")
-        lines.append(f"Дата: {added_at}")
+        lines.append(f"👤 Автор: {cls._format_admin_user(author, entry)}")
+        lines.append(f"🕓 Дата: {added_at}")
         if compact:
             return "\n".join(lines)
         lines.append("")
@@ -1371,18 +1371,18 @@ class DictionaryBotHandlers:
             lines.append(f"Статья: {entry_title}")
         if entry_id is not None:
             lines.append(f"ID статьи: {entry_id}")
-        lines.append(f"Автор: {cls._format_admin_user(author)}")
-        lines.append(f"Дата: {created_at}")
-        lines.append(f"Комментарий: {DictionaryBotHandlers._truncate_text(comment_text, 180)}")
+        lines.append(f"👤 Автор: {cls._format_admin_user(author)}")
+        lines.append(f"🕓 Дата: {created_at}")
+        lines.append(f"💬 {DictionaryBotHandlers._truncate_text(comment_text, 180)}")
         return "\n".join(lines)
 
     @classmethod
     def _build_suggestion_card(cls, suggestion: AdminSuggestion) -> str:
         return (
             f"#{suggestion.suggestion_id}\n"
-            f"Автор: {cls._format_admin_user(suggestion.author)}\n"
-            f"Дата: {cls._format_datetime(suggestion.created_at)}\n"
-            f"Статус: {suggestion.status}\n"
+            f"👤 Автор: {cls._format_admin_user(suggestion.author)}\n"
+            f"🕓 Дата: {cls._format_datetime(suggestion.created_at)}\n"
+            f"Статус: {suggestion.status}\n\n"
             f"{suggestion.text}"
         )
 
@@ -1407,18 +1407,18 @@ class DictionaryBotHandlers:
         failed_total = DictionaryBotHandlers._query_stats_total(failed_queries)
         return (
             f"{texts.ADMIN_STATS_TITLE}\n\n"
-            f"Пользователи: {total_users}\n"
-            f"Новые за день / неделю / месяц: "
+            f"👥 Пользователи: {total_users}\n"
+            f"🆕 Новые за день / неделю / месяц: "
             f"{new_users_day} / {new_users_week} / {new_users_month}\n"
-            f"Активные за день / неделю / месяц: "
+            f"🔥 Активные за день / неделю / месяц: "
             f"{active_users_day} / {active_users_week} / {active_users_month}\n\n"
-            f"Всего поисковых запросов: {total_searches}\n"
-            f"Топ запросов: {top_queries_text}\n"
-            f"Пустые или неудачные запросы: {failed_total}\n"
-            f"Топ неудачных запросов: {failed_queries_text}\n\n"
-            f"Пользовательских статей: {user_entries}\n"
-            f"Комментариев: {comments}\n"
-            f"Предложений: {suggestions}"
+            f"🔎 Всего поисков: {total_searches}\n"
+            f"🏷 Топ запросов: {top_queries_text}\n"
+            f"⚠️ Неудачных запросов: {failed_total}\n"
+            f"🧩 Частые неудачные запросы: {failed_queries_text}\n\n"
+            f"📝 Пользовательских статей: {user_entries}\n"
+            f"💬 Комментариев: {comments}\n"
+            f"💡 Предложений: {suggestions}"
         )
 
     @staticmethod
@@ -1454,7 +1454,7 @@ class DictionaryBotHandlers:
             parts.append(f"слово/статья: {primary}")
         if secondary:
             parts.append(f"автор: {secondary}")
-        return "Фильтры: " + "; ".join(parts) if parts else "Фильтры: нет"
+        return "Фильтры: " + "; ".join(parts) if parts else "Фильтры: не заданы"
 
     @staticmethod
     def _supports_broadcast_message(message: Message) -> bool:
@@ -1596,13 +1596,13 @@ class DictionaryBotHandlers:
         mode_label = "расширенный" if profile.mode == SearchMode.COMPLEX else "точный"
         return (
             f"{texts.ME_TITLE_TEXT}\n\n"
-            f"chat_id: {profile.user.chat_id}\n"
-            f"Режим поиска: {mode_label}\n"
-            f"Вы с ботом: {cls._format_profile_since(profile.created_at, reference_dt)}\n\n"
+            f"🔎 Режим поиска: {mode_label}\n"
+            f"📅 Вы с ботом: {cls._format_profile_since(profile.created_at, reference_dt)}\n\n"
             f"Поисков: {profile.searches_count}\n"
-            f"Добавленных статей: {profile.user_entries_count}\n"
+            f"Статей добавлено: {profile.user_entries_count}\n"
             f"Комментариев: {profile.comments_count}\n"
-            f"Предложений: {profile.suggestions_count}"
+            f"Предложений: {profile.suggestions_count}\n\n"
+            f"chat_id: {profile.user.chat_id}"
         )
 
     @classmethod
