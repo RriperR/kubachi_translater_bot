@@ -1,5 +1,5 @@
 .PHONY: install install-lint install-test install-all \
-	lint doclint lint-fix format format-check type-check test test-integration test-critical test-with-coverage project-check run run-embedding-service import-dictionary index-rag benchmark-retrieval db-upgrade db-downgrade db-current db-revision
+	lint doclint lint-fix format format-check type-check test test-integration test-critical test-with-coverage project-check run run-embedding-service import-dictionary index-rag benchmark-retrieval db-upgrade db-downgrade db-current db-revision vps-tunnel-up vps-tunnel-down
 
 install:
 	uv sync
@@ -76,3 +76,9 @@ db-current:
 
 db-revision:
 	docker compose run --rm --build bot python -m alembic -c alembic.ini revision $(ARGS)
+
+vps-tunnel-up:
+	docker compose -f docker-compose.yml -f docker-compose.vps-tunnel.yml up -d --build db bot
+
+vps-tunnel-down:
+	docker compose -f docker-compose.yml -f docker-compose.vps-tunnel.yml down
