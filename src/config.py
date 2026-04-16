@@ -52,6 +52,15 @@ class AppConfig(BaseSettings):
     rag_embedding_dimensions: int = 384
     rag_embedding_batch_size: int = 64
     rag_embedding_device: str = "cpu"
+    rag_embedding_service_url: str | None = None
+    rag_embedding_service_timeout_seconds: float = 15.0
+    embedding_service_provider: str = "sentence-transformers"
+    embedding_service_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_service_dimensions: int = 384
+    embedding_service_batch_size: int = 64
+    embedding_service_device: str = "cpu"
+    embedding_service_host: str = "127.0.0.1"
+    embedding_service_port: int = 8080
 
     @field_validator("admins_chat_ids", mode="before")
     @classmethod

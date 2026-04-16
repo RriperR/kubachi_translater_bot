@@ -11,6 +11,20 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  embeddings:
+    profiles: ["embedder"]
+    build:
+      context: .
+      dockerfile: Dockerfile.embedder
+    env_file:
+      - .env
+    volumes:
+      - ./src:/app/src
+      - hf_cache_slovar:/root/.cache/huggingface
+    ports:
+      - "${EMBEDDING_SERVICE_PORT:-8080}:8080"
+    restart: unless-stopped
+
   db:
     image: pgvector/pgvector:pg16
     restart: unless-stopped

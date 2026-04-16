@@ -62,11 +62,20 @@ ADMINS_CHAT_IDS=123456789,987654321
 RAG_ENABLED=true
 RAG_TOP_K=5
 RAG_MAX_DISTANCE=0.65
-RAG_EMBEDDING_PROVIDER=sentence-transformers
+RAG_EMBEDDING_PROVIDER=http
 RAG_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 RAG_EMBEDDING_DIMENSIONS=384
 RAG_EMBEDDING_BATCH_SIZE=64
 RAG_EMBEDDING_DEVICE=cpu
+RAG_EMBEDDING_SERVICE_URL=http://embeddings:8080
+RAG_EMBEDDING_SERVICE_TIMEOUT_SECONDS=15
+EMBEDDING_SERVICE_PROVIDER=sentence-transformers
+EMBEDDING_SERVICE_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+EMBEDDING_SERVICE_DIMENSIONS=384
+EMBEDDING_SERVICE_BATCH_SIZE=64
+EMBEDDING_SERVICE_DEVICE=cpu
+EMBEDDING_SERVICE_HOST=0.0.0.0
+EMBEDDING_SERVICE_PORT=8080
 ```
 
 Где:
@@ -128,13 +137,42 @@ make db-revision ARGS="-m \"новая миграция\""
 make index-rag
 ```
 
-По умолчанию проект использует локальный embedding provider на базе `sentence-transformers` и модели `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`.
+Рекомендуемый режим для Docker-развертывания: бот обращается к отдельному embedding-сервису по HTTP.
+
+По умолчанию `.env.example` настроен так:
+
+- `RAG_EMBEDDING_PROVIDER=http`
+- `RAG_EMBEDDING_SERVICE_URL=http://embeddings:8080`
+- отдельный сервис `embeddings` сам держит локальную модель `sentence-transformers`
+
+Если embedding-сервис работает на другом сервере, достаточно поменять только:
+
+```env
+RAG_EMBEDDING_SERVICE_URL=http://your-host:8080
+```
 
 Что важно:
 
-- первый запуск `make index-rag` скачивает модель из Hugging Face и может идти несколько минут;
+- первый запуск embedding-сервиса скачивает модель из Hugging Face и может идти несколько минут;
 - после смены embedding-модели или размерности старые вектора автоматически помечаются как `pending`, и индексацию нужно прогнать заново;
-- в `docker-compose.yml` для кэша Hugging Face уже подключен volume `hf_cache_slovar`, чтобы не скачивать модель при каждом пересоздании контейнера.
+- в `docker-compose.yml` для кэша Hugging Face уже подключен volume `hf_cache_slovar`, чтобы не скачивать модель при каждом пересоздании контейнера;
+- боту локальная embedding-модель больше не нужна, если он работает через `RAG_EMBEDDING_PROVIDER=http`.
+
+### Отдельный embedding-сервис
+
+Локально его можно запустить так:
+
+```bash
+uv run python src/run_embedding_service.py
+```
+
+Или отдельным Docker-контейнером:
+
+```bash
+docker compose --profile embedder up --build embeddings
+```
+
+Тогда бот и ручная переиндексация могут обращаться к нему по адресу из `RAG_EMBEDDING_SERVICE_URL`.
 
 ## Retrieval Benchmark
 
@@ -189,6 +227,12 @@ docker compose up --build
 
 В `docker-compose.yml` уже используется образ Postgres с `pgvector`.
 
+Если нужен локальный embedding-сервис в отдельном контейнере:
+
+```bash
+docker compose --profile embedder up --build
+```
+
 ## Проверки
 
 ```bash
@@ -207,4 +251,4 @@ make project-check
 
 ## Статус проекта
 
-Словарь хранится в нормализованной модели PostgreSQL, для RAG уже используются чанки, `pgvector` и локальная multilingual embedding-модель. Текущий `complex`-поиск опирается на semantic retrieval, а следующий практический шаг развития проекта — гибридный retrieval и затем генерация ответа через LLM поверх найденного контекста.
+Словарь хранится в нормализованной модели PostgreSQL, для RAG уже используются чанки, `pgvector` и отдельный embedding-сервис. Текущий `complex`-поиск опирается на semantic retrieval, а следующий практический шаг развития проекта — гибридный retrieval и затем генерация ответа через LLM поверх найденного контекста.

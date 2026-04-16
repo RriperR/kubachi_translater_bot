@@ -6,8 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-COPY requirements.txt ./requirements.txt
-RUN pip install -r requirements.txt
+COPY requirements.bot.txt ./requirements.bot.txt
+RUN pip install -r requirements.bot.txt
 
 COPY alembic.ini ./alembic.ini
 COPY migrations ./migrations

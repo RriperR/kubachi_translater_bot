@@ -1,5 +1,5 @@
 .PHONY: install install-lint install-test install-all \
-	lint doclint lint-fix format format-check type-check test test-integration test-critical test-with-coverage project-check run import-dictionary index-rag benchmark-retrieval db-upgrade db-downgrade db-current db-revision
+	lint doclint lint-fix format format-check type-check test test-integration test-critical test-with-coverage project-check run run-embedding-service import-dictionary index-rag benchmark-retrieval db-upgrade db-downgrade db-current db-revision
 
 install:
 	uv sync
@@ -52,6 +52,9 @@ project-check:
 
 run:
 	uv run python src/main.py
+
+run-embedding-service:
+	uv run python src/run_embedding_service.py
 
 import-dictionary:
 	uv run python src/import_dictionary.py
