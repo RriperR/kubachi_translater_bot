@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 import psycopg2
@@ -17,7 +17,7 @@ from models import AdminStats, AdminSuggestion, SearchMode, TelegramUser, UserPr
 class PostgresRepository:
     """Репозиторий для работы с таблицами приложения в PostgreSQL."""
 
-    _EXPECTED_SCHEMA_REVISION = "20260403_0008"
+    _EXPECTED_SCHEMA_REVISION = "20260416_0009"
 
     def __init__(self, config: DatabaseConfig) -> None:
         """Сохранить параметры подключения к базе данных.
@@ -141,7 +141,6 @@ class PostgresRepository:
             "command" if action_text.startswith("/") else "search"
         )
         now_utc = datetime.now(timezone.utc)
-        now_local = self._utc_plus_three_now()
         with self._connect() as connection:
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute("SELECT id FROM users WHERE chatid = %s", (str(chat_id),))
@@ -153,16 +152,14 @@ class PostgresRepository:
                     INSERT INTO actions (
                         action,
                         action_type,
-                        date_time,
                         created_at,
                         fk_user
                     )
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s)
                     """,
                     (
                         action_text,
                         resolved_action_type,
-                        now_local.isoformat(sep=" ", timespec="seconds"),
                         now_utc,
                         user["id"],
                     ),
@@ -599,7 +596,3 @@ class PostgresRepository:
         )
         rows = cursor.fetchall()
         return tuple((str(row["query"]), int(row["hits"])) for row in rows)
-
-    @staticmethod
-    def _utc_plus_three_now() -> datetime:
-        return datetime.utcnow() + timedelta(hours=3)
