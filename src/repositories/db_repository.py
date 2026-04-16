@@ -17,7 +17,7 @@ from models import AdminStats, AdminSuggestion, SearchMode, TelegramUser, UserPr
 class PostgresRepository:
     """Репозиторий для работы с таблицами приложения в PostgreSQL."""
 
-    _EXPECTED_SCHEMA_REVISION = "20260416_0010"
+    _EXPECTED_SCHEMA_REVISION = "20260416_0011"
 
     def __init__(self, config: DatabaseConfig) -> None:
         """Сохранить параметры подключения к базе данных.
@@ -141,6 +141,7 @@ class PostgresRepository:
             "command" if action_text.startswith("/") else "search"
         )
         now_utc = datetime.now(timezone.utc)
+        searches_delta = 1 if resolved_action_type in {"search", "not_found"} else 0
         with self._connect() as connection:
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute("SELECT id FROM users WHERE chatid = %s", (str(chat_id),))
@@ -172,6 +173,15 @@ class PostgresRepository:
                     """,
                     (now_utc, user["id"]),
                 )
+                if searches_delta:
+                    cursor.execute(
+                        """
+                        UPDATE users
+                        SET searches_count = searches_count + %s
+                        WHERE id = %s
+                        """,
+                        (searches_delta, user["id"]),
+                    )
             connection.commit()
 
     def log_search_query(self, query: str, chat_id: int, found: bool) -> None:
@@ -222,6 +232,14 @@ class PostgresRepository:
                     (db_user["id"], suggestion_text, "new", now, now),
                 )
                 row = cursor.fetchone()
+                cursor.execute(
+                    """
+                    UPDATE users
+                    SET suggestions_count = suggestions_count + 1
+                    WHERE id = %s
+                    """,
+                    (db_user["id"],),
+                )
             connection.commit()
         if row is None:
             raise RuntimeError("Не удалось сохранить предложение")
@@ -374,11 +392,7 @@ class PostgresRepository:
             )
             total_searches = self._scalar(
                 cursor,
-                """
-                SELECT COUNT(*)
-                FROM actions
-                WHERE action_type IN ('search', 'not_found')
-                """,
+                "SELECT COALESCE(SUM(searches_count), 0) FROM users",
             )
             top_queries = self._fetch_query_stats(cursor, action_type="search")
             failed_queries = self._fetch_query_stats(cursor, action_type="not_found")
@@ -420,7 +434,19 @@ class PostgresRepository:
         ):
             cursor.execute(
                 """
-                SELECT id, chatid, username, firstname, lastname, mode, created_at, updated_at
+                SELECT
+                    id,
+                    chatid,
+                    username,
+                    firstname,
+                    lastname,
+                    mode,
+                    created_at,
+                    updated_at,
+                    searches_count,
+                    user_entries_count,
+                    comments_count,
+                    suggestions_count
                 FROM users
                 WHERE chatid = %s
                 """,
@@ -429,44 +455,6 @@ class PostgresRepository:
             user_row = cursor.fetchone()
             if user_row is None:
                 return None
-
-            user_id = int(user_row["id"])
-            searches_count = self._scalar(
-                cursor,
-                """
-                SELECT COUNT(*)
-                FROM actions
-                WHERE fk_user = %s
-                  AND action_type IN ('search', 'not_found')
-                """,
-                (user_id,),
-            )
-            suggestions_count = self._scalar(
-                cursor,
-                "SELECT COUNT(*) FROM suggestions WHERE fk_user = %s",
-                (user_id,),
-            )
-            user_entries_count = self._scalar(
-                cursor,
-                """
-                SELECT COUNT(*)
-                FROM dictionary_entries AS entries
-                JOIN users ON users.id = entries.user_id
-                WHERE entries.source = 'user'
-                  AND users.chatid = %s
-                """,
-                (str(chat_id),),
-            )
-            comments_count = self._scalar(
-                cursor,
-                """
-                SELECT COUNT(*)
-                FROM dictionary_entry_comments AS comments
-                JOIN users ON users.id = comments.user_id
-                WHERE users.chatid = %s
-                """,
-                (str(chat_id),),
-            )
 
         return UserProfileStats(
             user=TelegramUser(
@@ -480,10 +468,10 @@ class PostgresRepository:
             mode=SearchMode.from_value(user_row.get("mode")),
             created_at=user_row["created_at"],
             last_activity_at=user_row["updated_at"],
-            searches_count=searches_count,
-            user_entries_count=user_entries_count,
-            comments_count=comments_count,
-            suggestions_count=suggestions_count,
+            searches_count=int(user_row.get("searches_count") or 0),
+            user_entries_count=int(user_row.get("user_entries_count") or 0),
+            comments_count=int(user_row.get("comments_count") or 0),
+            suggestions_count=int(user_row.get("suggestions_count") or 0),
         )
 
     def get_user_mode(self, chat_id: int) -> SearchMode:

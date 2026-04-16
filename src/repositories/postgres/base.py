@@ -16,6 +16,37 @@ from normalization import tokenize
 class PostgresRepositoryBase:
     """База для репозиториев, работающих с PostgreSQL."""
 
+    _USER_COUNTER_COLUMNS = frozenset(
+        {
+            "searches_count",
+            "suggestions_count",
+            "comments_count",
+            "user_entries_count",
+        }
+    )
+    _USER_COUNTER_QUERIES = {
+        "searches_count": """
+            UPDATE users
+            SET searches_count = GREATEST(searches_count + %s, 0)
+            WHERE id = %s
+        """,
+        "suggestions_count": """
+            UPDATE users
+            SET suggestions_count = GREATEST(suggestions_count + %s, 0)
+            WHERE id = %s
+        """,
+        "comments_count": """
+            UPDATE users
+            SET comments_count = GREATEST(comments_count + %s, 0)
+            WHERE id = %s
+        """,
+        "user_entries_count": """
+            UPDATE users
+            SET user_entries_count = GREATEST(user_entries_count + %s, 0)
+            WHERE id = %s
+        """,
+    }
+
     def __init__(self, config: DatabaseConfig, source: DictionarySource) -> None:
         """Сохранить параметры подключения и закрепленный источник.
 
@@ -86,6 +117,58 @@ class PostgresRepositoryBase:
             NotImplementedError: Если конкретный репозиторий не реализовал RAG-слой.
         """
         raise NotImplementedError
+
+    def _adjust_user_counter(
+        self,
+        cursor: Any,
+        user_id: int | None,
+        column: str,
+        delta: int,
+    ) -> None:
+        """Изменить числовой счётчик пользователя.
+
+        Args:
+            cursor: Открытый PostgreSQL-курсор.
+            user_id: Идентификатор пользователя.
+            column: Имя столбца-счётчика в `users`.
+            delta: На сколько нужно изменить значение.
+
+        Raises:
+            ValueError: Если передан неподдерживаемый счётчик.
+        """
+        if user_id is None or delta == 0:
+            return
+        if column not in self._USER_COUNTER_COLUMNS:
+            raise ValueError(f"Неподдерживаемый счётчик пользователя: {column}")
+
+        cursor.execute(self._USER_COUNTER_QUERIES[column], (delta, user_id))
+
+    def _decrement_comment_counters_for_entry(self, cursor: Any, entry_id: int) -> None:
+        """Уменьшить число комментариев у авторов удаляемой статьи.
+
+        Args:
+            cursor: Открытый PostgreSQL-курсор.
+            entry_id: Идентификатор удаляемой статьи.
+        """
+        cursor.execute(
+            """
+            WITH deleted_comment_counts AS (
+                SELECT user_id, COUNT(*) AS comments_count
+                FROM dictionary_entry_comments
+                WHERE entry_id = %s
+                  AND user_id IS NOT NULL
+                GROUP BY user_id
+            )
+            UPDATE users
+            SET comments_count = GREATEST(
+                users.comments_count - deleted_comment_counts.comments_count,
+                0
+            )
+            FROM deleted_comment_counts
+            WHERE users.id = deleted_comment_counts.user_id
+            """,
+            (entry_id,),
+        )
 
     def _fetch_entry_rows(
         self,

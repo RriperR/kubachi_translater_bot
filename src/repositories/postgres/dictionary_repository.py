@@ -118,6 +118,14 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
 
             self._replace_examples(cursor, inserted_id, examples)
             self._replace_notes(cursor, inserted_id, notes)
+            author_id = self._find_existing_user_id(
+                cursor,
+                chat_id=entry.contributor.chat_id,
+                username=entry.contributor.username,
+                first_name=entry.contributor.first_name,
+                last_name=entry.contributor.last_name,
+            )
+            self._adjust_user_counter(cursor, author_id, "user_entries_count", 1)
             self._sync_rag_chunks_for_entry(cursor, inserted_id)
             connection.commit()
 
@@ -320,12 +328,30 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
         if self._source != DictionarySource.USER:
             raise ValueError("Удаление доступно только для USER-репозитория")
         with self._connect() as connection:
-            with connection.cursor() as cursor:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT user_id
+                    FROM dictionary_entries
+                    WHERE id = %s
+                      AND source = %s
+                    """,
+                    (entry_id, self._source.value),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    connection.commit()
+                    return False
+
+                user_id = int(row["user_id"]) if row["user_id"] is not None else None
+                self._decrement_comment_counters_for_entry(cursor, entry_id)
                 cursor.execute(
                     "DELETE FROM dictionary_entries WHERE id = %s AND source = %s",
                     (entry_id, self._source.value),
                 )
                 deleted = bool(cursor.rowcount > 0)
+                if deleted:
+                    self._adjust_user_counter(cursor, user_id, "user_entries_count", -1)
             connection.commit()
         return deleted
 
@@ -424,7 +450,7 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
             connection.cursor(cursor_factory=RealDictCursor) as cursor,
         ):
             cursor.execute(
-                "SELECT entry_id FROM dictionary_entry_comments WHERE id = %s",
+                "SELECT entry_id, user_id FROM dictionary_entry_comments WHERE id = %s",
                 (comment_id,),
             )
             row = cursor.fetchone()
@@ -432,7 +458,9 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
                 connection.commit()
                 return False
             entry_id = int(row["entry_id"])
+            user_id = int(row["user_id"]) if row["user_id"] is not None else None
             cursor.execute("DELETE FROM dictionary_entry_comments WHERE id = %s", (comment_id,))
+            self._adjust_user_counter(cursor, user_id, "comments_count", -1)
             self._sync_rag_chunks_for_entry(cursor, entry_id)
             connection.commit()
         return True
@@ -460,7 +488,7 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
         ):
             cursor.execute(
                 """
-                SELECT id
+                SELECT id, user_id
                 FROM dictionary_entries
                 WHERE source = %s
                   AND CONCAT(word, ' - ', translation) = %s
@@ -495,6 +523,7 @@ class DictionaryRepositoryMixin(PostgresRepositoryBase):
                 "UPDATE dictionary_entries SET updated_at = NOW() WHERE id = %s",
                 (entry_id,),
             )
+            self._adjust_user_counter(cursor, user_id, "comments_count", 1)
             self._sync_rag_chunks_for_entry(cursor, entry_id)
             connection.commit()
         return True

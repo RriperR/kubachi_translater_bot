@@ -160,12 +160,30 @@ class DictionaryAdminRepositoryMixin(
             raise ValueError("Удаление доступно только для USER-репозитория")
 
         with self._connect() as connection:
-            with connection.cursor() as cursor:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT user_id
+                    FROM dictionary_entries
+                    WHERE id = %s
+                      AND source = %s
+                    """,
+                    (entry_id, self._source.value),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    connection.commit()
+                    return False
+
+                user_id = int(row["user_id"]) if row["user_id"] is not None else None
+                self._decrement_comment_counters_for_entry(cursor, entry_id)
                 cursor.execute(
                     "DELETE FROM dictionary_entries WHERE id = %s AND source = %s",
                     (entry_id, self._source.value),
                 )
                 deleted = bool(cursor.rowcount > 0)
+                if deleted:
+                    self._adjust_user_counter(cursor, user_id, "user_entries_count", -1)
             connection.commit()
         return deleted
 
@@ -272,7 +290,7 @@ class DictionaryAdminRepositoryMixin(
             connection.cursor(cursor_factory=RealDictCursor) as cursor,
         ):
             cursor.execute(
-                "SELECT entry_id FROM dictionary_entry_comments WHERE id = %s",
+                "SELECT entry_id, user_id FROM dictionary_entry_comments WHERE id = %s",
                 (comment_id,),
             )
             row = cursor.fetchone()
@@ -281,7 +299,9 @@ class DictionaryAdminRepositoryMixin(
                 return False
 
             entry_id = int(row["entry_id"])
+            user_id = int(row["user_id"]) if row["user_id"] is not None else None
             cursor.execute("DELETE FROM dictionary_entry_comments WHERE id = %s", (comment_id,))
+            self._adjust_user_counter(cursor, user_id, "comments_count", -1)
             cursor.execute(
                 "UPDATE dictionary_entries SET updated_at = NOW() WHERE id = %s",
                 (entry_id,),
