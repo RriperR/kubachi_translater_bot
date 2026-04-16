@@ -259,6 +259,12 @@ make vps-tunnel-down
 - `.env` по-прежнему нужен для `BOT_TOKEN`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` и остальных секретов;
 - override не меняет локальную разработку и применяется только когда ты явно используешь `make vps-tunnel-up`.
 
+Для обновления кода, миграций и перезапуска стека одной командой есть отдельный скрипт:
+
+```bash
+cd ~/slovar_next && bash scripts/deploy_vps.sh
+```
+
 ## Проверки
 
 ```bash
