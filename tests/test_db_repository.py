@@ -159,7 +159,7 @@ def test_insert_suggestion_increments_suggestion_counter() -> None:
     suggestion_id = repository.insert_suggestion(author, "Добавить новые примеры")
 
     assert suggestion_id == 21
-    assert connection.commits == 2
+    assert connection.commits == 1
     assert any(
         "SET suggestions_count = suggestions_count + 1" in query for query, _ in cursor.executed
     )

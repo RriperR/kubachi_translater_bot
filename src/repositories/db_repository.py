@@ -212,14 +212,41 @@ class PostgresRepository:
             RuntimeError: Если пользователя не удалось найти или предложение не сохранилось.
             ValueError: Если текст предложения пустой.
         """
-        self.ensure_user(user)
         suggestion_text = text.strip()
         if not suggestion_text:
             raise ValueError("Текст предложения не должен быть пустым")
         now = datetime.now(timezone.utc)
         with self._connect() as connection:
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute("SELECT id FROM users WHERE chatid = %s", (str(user.chat_id),))
+                cursor.execute(
+                    """
+                    INSERT INTO users (
+                        username,
+                        firstname,
+                        lastname,
+                        chatid,
+                        mode,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (chatid) DO UPDATE
+                    SET username = EXCLUDED.username,
+                        firstname = EXCLUDED.firstname,
+                        lastname = EXCLUDED.lastname,
+                        updated_at = EXCLUDED.updated_at
+                    RETURNING id
+                    """,
+                    (
+                        user.username,
+                        user.first_name,
+                        user.last_name,
+                        str(user.chat_id),
+                        SearchMode.LITE.value,
+                        now,
+                        now,
+                    ),
+                )
                 db_user = cursor.fetchone()
                 if db_user is None:
                     raise RuntimeError("Не удалось найти пользователя для сохранения предложения")
@@ -317,22 +344,15 @@ class PostgresRepository:
         Returns:
             Список пользователей, у которых была активность в заданном окне.
         """
-        with (
-            self._connect() as connection,
-            connection.cursor(cursor_factory=RealDictCursor) as cursor,
-        ):
-            cursor.execute(
-                """
-                SELECT DISTINCT users.chatid, users.username, users.firstname, users.lastname
-                FROM users
-                JOIN actions ON actions.fk_user = users.id
-                WHERE actions.created_at >= NOW() - (%s || ' days')::interval
-                ORDER BY users.id
-                """,
-                (days,),
-            )
-            rows = cursor.fetchall()
-        return [self._row_to_user(row) for row in rows]
+        return self._fetch_recipients(
+            """
+            SELECT chatid, username, firstname, lastname
+            FROM users
+            WHERE updated_at >= NOW() - (%s || ' days')::interval
+            ORDER BY id
+            """,
+            (days,),
+        )
 
     def fetch_broadcast_recipients_with_actions(self) -> list[TelegramUser]:
         """Получить пользователей, у которых есть хотя бы одно действие в журнале.
