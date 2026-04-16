@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from bot.application import DictionaryBotApp
 from bot.handlers import DictionaryBotHandlers
 from models import SearchMode, TelegramUser, UserProfileStats
 
@@ -59,3 +60,40 @@ def test_build_user_profile_summary_contains_main_fields() -> None:
     assert "1" in summary
     assert "@tester" not in summary
     assert "Последняя активность" not in summary
+
+
+def test_build_default_commands_contains_main_user_actions() -> None:
+    """Меню обычного пользователя должно содержать основные понятные команды."""
+    commands = DictionaryBotApp._build_default_commands()
+
+    assert [command.command for command in commands] == [
+        "start",
+        "help",
+        "info",
+        "mode",
+        "me",
+        "add",
+        "comment",
+        "suggest",
+    ]
+    assert [command.description for command in commands] == [
+        "Начать заново",
+        "Краткая помощь",
+        "Как пользоваться ботом",
+        "Выбрать режим поиска",
+        "Моя статистика",
+        "Предложить новый перевод",
+        "Комментарий к статье",
+        "Идея или замечание",
+    ]
+
+
+def test_build_admin_commands_extends_default_commands() -> None:
+    """Меню администратора должно включать пользовательские команды и админские пункты."""
+    commands = DictionaryBotApp._build_admin_commands()
+
+    assert [command.command for command in commands][-2:] == ["admin", "chatid"]
+    assert [command.description for command in commands][-2:] == [
+        "Открыть админку",
+        "Показать chat_id",
+    ]

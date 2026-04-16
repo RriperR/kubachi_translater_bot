@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
+
 from bot.bootstrap import build_stack
 from bot.handlers import DictionaryBotHandlers
 from config import AppConfig, load_config
@@ -42,7 +44,55 @@ class DictionaryBotApp:
         await asyncio.to_thread(self._runtime.db_repository.require_schema)
         await asyncio.to_thread(self._runtime.main_repository.sync_rag_chunks)
         await asyncio.to_thread(self._runtime.user_repository.sync_rag_chunks)
+        await self._configure_commands()
         await self._dispatcher.start_polling(self._bot)
+
+    async def _configure_commands(self) -> None:
+        """Настроить подсказки команд Telegram для пользователей и админов."""
+        await self._bot.set_my_commands(
+            self._build_default_commands(),
+            scope=BotCommandScopeDefault(),
+        )
+        if not self._config.admins_chat_ids:
+            return
+
+        admin_commands = self._build_admin_commands()
+        for chat_id in self._config.admins_chat_ids:
+            await self._bot.set_my_commands(
+                admin_commands,
+                scope=BotCommandScopeChat(chat_id=chat_id),
+            )
+
+    @staticmethod
+    def _build_default_commands() -> list[BotCommand]:
+        """Собрать набор команд для обычного пользователя.
+
+        Returns:
+            Список команд, который Telegram покажет в меню бота.
+        """
+        return [
+            BotCommand(command="start", description="Начать заново"),
+            BotCommand(command="help", description="Краткая помощь"),
+            BotCommand(command="info", description="Как пользоваться ботом"),
+            BotCommand(command="mode", description="Выбрать режим поиска"),
+            BotCommand(command="me", description="Моя статистика"),
+            BotCommand(command="add", description="Предложить новый перевод"),
+            BotCommand(command="comment", description="Комментарий к статье"),
+            BotCommand(command="suggest", description="Идея или замечание"),
+        ]
+
+    @classmethod
+    def _build_admin_commands(cls) -> list[BotCommand]:
+        """Собрать набор команд для администратора.
+
+        Returns:
+            Список команд администратора для Telegram-меню.
+        """
+        return [
+            *cls._build_default_commands(),
+            BotCommand(command="admin", description="Открыть админку"),
+            BotCommand(command="chatid", description="Показать chat_id"),
+        ]
 
 
 async def run() -> None:
