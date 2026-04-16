@@ -7,7 +7,8 @@ import logging
 import uvicorn
 
 from config import load_config
-from embedding_service.app import EmbeddingServiceApp
+
+from .api import EmbeddingServiceApp
 
 
 def main() -> None:

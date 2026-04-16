@@ -163,7 +163,7 @@ RAG_EMBEDDING_SERVICE_URL=http://your-host:8080
 Локально его можно запустить так:
 
 ```bash
-uv run python src/run_embedding_service.py
+uv run python -m embedding_service.main
 ```
 
 Или отдельным Docker-контейнером:

@@ -54,7 +54,7 @@ run:
 	uv run python src/main.py
 
 run-embedding-service:
-	uv run python src/run_embedding_service.py
+	uv run python -m embedding_service.main
 
 import-dictionary:
 	uv run python src/import_dictionary.py

@@ -6,8 +6,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from config import AppConfig
-from services.rag import build_local_embedding_provider
 from services.rag.embeddings.base import EmbeddingProvider
+from services.rag.factory import build_local_embedding_provider
 
 
 class EmbedRequest(BaseModel):
@@ -31,7 +31,6 @@ class EmbeddingServiceApp:
         Args:
             config: Корневая конфигурация приложения.
         """
-        self._config = config
         self._provider = build_local_embedding_provider(config)
         self.app = self._create_app()
 

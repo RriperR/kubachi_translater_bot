@@ -11,4 +11,4 @@ RUN pip install -r requirements.embedder.txt
 
 COPY src ./src
 
-CMD ["python", "src/run_embedding_service.py"]
+CMD ["python", "-m", "embedding_service.main"]
