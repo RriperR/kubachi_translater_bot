@@ -11,12 +11,9 @@ from models import (
     SearchMode,
     SemanticSearchCandidate,
 )
-from services.rag import (
-    DictionaryRagIndexer,
-    EmbeddingVector,
-    HashEmbeddingProvider,
-    PgvectorSearchProvider,
-)
+from services.rag import EmbeddingVector, HashEmbeddingProvider
+from services.rag.indexer import DictionaryRagIndexer
+from services.rag.retrieval import PgvectorSearchProvider
 
 
 class SemanticRepositoryStub:

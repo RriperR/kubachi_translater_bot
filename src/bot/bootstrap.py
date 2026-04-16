@@ -11,7 +11,8 @@ from models import DictionarySource
 from repositories.db_repository import PostgresRepository
 from repositories.postgres import PostgresDictionaryRepository
 from services.export_service import DatabaseExportService
-from services.rag import PgvectorSearchProvider, build_embedding_provider
+from services.rag.factory import build_embedding_provider
+from services.rag.retrieval import PgvectorSearchProvider
 from services.search import DictionarySearchService, LexicalSearchProvider
 from services.search.lexical import SearchProvider
 from services.session_store import SessionStore

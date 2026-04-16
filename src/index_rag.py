@@ -8,7 +8,8 @@ from config import load_config
 from models import DictionarySource
 from repositories.db_repository import PostgresRepository
 from repositories.postgres import PostgresDictionaryRepository
-from services.rag import DictionaryRagIndexer, build_embedding_provider
+from services.rag.factory import build_embedding_provider
+from services.rag.indexer import DictionaryRagIndexer
 
 
 def run() -> None:

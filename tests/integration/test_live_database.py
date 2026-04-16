@@ -8,7 +8,8 @@ from config import load_config
 from models import DictionaryEntry, DictionarySource, SearchMode
 from repositories.db_repository import PostgresRepository
 from repositories.postgres import PostgresDictionaryRepository
-from services.rag import HashEmbeddingProvider, PgvectorSearchProvider
+from services.rag import HashEmbeddingProvider
+from services.rag.retrieval import PgvectorSearchProvider
 from services.search import DictionarySearchService, LexicalSearchProvider
 
 
