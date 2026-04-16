@@ -12,7 +12,7 @@ git fetch origin
 git reset --hard origin/main
 
 echo "[deploy] applying migrations"
-docker compose "${COMPOSE_ARGS[@]}" run --rm bot python -m alembic -c alembic.ini upgrade head
+docker compose "${COMPOSE_ARGS[@]}" run --rm --build bot python -m alembic -c alembic.ini upgrade head
 
 echo "[deploy] rebuilding and starting db + bot"
 docker compose "${COMPOSE_ARGS[@]}" up -d --build db bot
