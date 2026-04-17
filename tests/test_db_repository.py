@@ -8,20 +8,26 @@ from contextlib import contextmanager
 from pydantic import SecretStr
 
 from config import DatabaseConfig
-from models import TelegramUser
+from models import BroadcastAudience, BroadcastDeliveryStatus, BroadcastRecipient, TelegramUser
 from repositories.db_repository import PostgresRepository
 
 
 class FakeCursor:
     """Простой курсор, запоминающий выполненные запросы и заранее заданные ответы."""
 
-    def __init__(self, responses: list[dict[str, object] | None]) -> None:
+    def __init__(
+        self,
+        responses: list[dict[str, object] | None],
+        many_responses: list[list[dict[str, object]]] | None = None,
+    ) -> None:
         """Сохранить очередь ответов для `fetchone`.
 
         Args:
             responses: Последовательность результатов, которые вернёт `fetchone`.
+            many_responses: Последовательность результатов, которые вернёт `fetchall`.
         """
         self._responses = list(responses)
+        self._many_responses = list(many_responses or [])
         self.executed: list[tuple[str, tuple[object, ...]]] = []
 
     def __enter__(self) -> FakeCursor:
@@ -61,6 +67,16 @@ class FakeCursor:
         if not self._responses:
             return None
         return self._responses.pop(0)
+
+    def fetchall(self) -> list[dict[str, object]]:
+        """Вернуть следующий подготовленный набор строк.
+
+        Returns:
+            Подготовленный список строк.
+        """
+        if not self._many_responses:
+            return []
+        return self._many_responses.pop(0)
 
 
 class FakeConnection:
@@ -162,4 +178,45 @@ def test_insert_suggestion_increments_suggestion_counter() -> None:
     assert connection.commits == 1
     assert any(
         "SET suggestions_count = suggestions_count + 1" in query for query, _ in cursor.executed
+    )
+
+
+def test_create_broadcast_saves_snapshot_of_recipients() -> None:
+    """Создание рассылки должно сохранять запись и адресатов со статусом pending."""
+    cursor = FakeCursor(responses=[{"id": 5}, {"id": 77}])
+    connection = FakeConnection(cursor)
+    repository = FakePostgresRepository(connection)
+
+    recipients = [
+        BroadcastRecipient(
+            user_id=10,
+            user=TelegramUser(chat_id=111, username="one", first_name="Один", last_name=""),
+        ),
+        BroadcastRecipient(
+            user_id=11,
+            user=TelegramUser(chat_id=222, username="two", first_name="Два", last_name=""),
+        ),
+    ]
+
+    broadcast_id = repository.create_broadcast(
+        created_by_chat_id=123456,
+        audience=BroadcastAudience.ALL,
+        audience_days=None,
+        source_chat_id=123456,
+        source_message_id=99,
+        text_preview="Новость",
+        content_type="текст",
+        recipients=recipients,
+    )
+
+    assert broadcast_id == 77
+    assert connection.commits == 1
+    assert any("INSERT INTO broadcasts" in query for query, _ in cursor.executed)
+    assert sum(
+        1 for query, params in cursor.executed if "INSERT INTO broadcast_deliveries" in query
+    ) == 2
+    assert all(
+        params[-1] == BroadcastDeliveryStatus.PENDING.value
+        for query, params in cursor.executed
+        if "INSERT INTO broadcast_deliveries" in query
     )

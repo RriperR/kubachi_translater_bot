@@ -164,11 +164,17 @@ ADMIN_BROADCAST_DAYS_PROMPT = (
 ADMIN_BROADCAST_DAYS_ERROR_TEXT = "Нужно ввести положительное число дней."
 ADMIN_BROADCAST_CONFIRM_TITLE = "⚠️ Подтвердите рассылку"
 ADMIN_BROADCAST_SENT_TEXT = "Рассылка завершена."
+ADMIN_BROADCAST_STARTED_TEXT = "Рассылка запущена."
 ADMIN_BROADCAST_NO_RECIPIENTS_TEXT = "Для выбранного сегмента нет адресатов."
+ADMIN_BROADCAST_NOT_FOUND_TEXT = "Рассылка не найдена."
+ADMIN_BROADCAST_NOTHING_TO_RETRY_TEXT = "Для этой рассылки нет недоставленных адресатов."
 ADMIN_BROADCAST_REPORT_TEXT = (
     "📬 Отчёт по рассылке\n\n"
+    "ID: {broadcast_id}\n"
+    "Всего адресатов: {total}\n"
     "Успешно: {success}\n"
     "Бот заблокирован: {blocked}\n"
+    "Нужно повторить: {retryable}\n"
     "Ошибки доставки: {errors}"
 )
 

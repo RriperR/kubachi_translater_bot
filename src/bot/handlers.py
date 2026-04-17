@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -25,6 +25,9 @@ from config import AppConfig
 from models import (
     AdminSuggestion,
     BroadcastAudience,
+    BroadcastDeliveryStatus,
+    BroadcastProgress,
+    BroadcastRecipient,
     DictionaryEntry,
     DictionarySource,
     SearchMode,
@@ -380,6 +383,9 @@ class DictionaryBotHandlers:
             return
         if data == "admin:broadcast:send":
             await self._send_broadcast(message.chat.id, state)
+            return
+        if data.startswith("admin:broadcast:retry:"):
+            await self._retry_broadcast(message.chat.id, int(data.rsplit(":", 1)[1]))
             return
         if data == "admin:broadcast:cancel":
             await state.clear()
@@ -840,40 +846,190 @@ class DictionaryBotHandlers:
             )
             return
 
-        success = 0
-        blocked = 0
-        errors = 0
-        for recipient in recipients:
-            try:
-                await self._deliver_broadcast_message(
-                    recipient_chat_id=recipient.chat_id,
-                    source_chat_id=int(source_chat_id),
-                    message_id=int(message_id),
-                    fallback_text=broadcast_text,
-                )
-                success += 1
-            except TelegramForbiddenError:
-                blocked += 1
-            except TelegramBadRequest:
-                errors += 1
-            except Exception:  # pragma: no cover
-                logger.exception("Broadcast delivery failed")
-                errors += 1
-            await asyncio.sleep(0.03)
-
+        broadcast_id = await asyncio.to_thread(
+            self._db_repository.create_broadcast,
+            chat_id,
+            audience,
+            days,
+            int(source_chat_id),
+            int(message_id),
+            broadcast_text,
+            str(data.get("admin_broadcast_content_label") or "сообщение"),
+            recipients,
+        )
         await state.clear()
-        await self._bot.send_message(chat_id, texts.ADMIN_BROADCAST_SENT_TEXT)
+        await self._bot.send_message(chat_id, texts.ADMIN_BROADCAST_STARTED_TEXT)
+        progress = await self._run_broadcast(broadcast_id)
         await self._bot.send_message(
             chat_id,
-            self._build_broadcast_report(success=success, blocked=blocked, errors=errors),
+            texts.ADMIN_BROADCAST_SENT_TEXT,
             reply_markup=self._admin_root_markup(),
         )
+        await self._bot.send_message(
+            chat_id,
+            self._build_broadcast_report(progress),
+            reply_markup=self._broadcast_report_markup(progress),
+        )
+
+    async def _retry_broadcast(self, chat_id: int, broadcast_id: int) -> None:
+        """Повторно отправить рассылку только тем, кому она не дошла.
+
+        Args:
+            chat_id: Chat ID администратора, запросившего повторную отправку.
+            broadcast_id: Идентификатор уже созданной рассылки.
+        """
+        broadcast = await asyncio.to_thread(self._db_repository.fetch_broadcast, broadcast_id)
+        if broadcast is None:
+            await self._bot.send_message(
+                chat_id,
+                texts.ADMIN_BROADCAST_NOT_FOUND_TEXT,
+                reply_markup=self._admin_root_markup(),
+            )
+            return
+
+        retry_targets = await asyncio.to_thread(
+            self._db_repository.fetch_broadcast_delivery_targets,
+            broadcast_id,
+            (
+                BroadcastDeliveryStatus.PENDING,
+                BroadcastDeliveryStatus.RETRY,
+                BroadcastDeliveryStatus.FAILED,
+            ),
+        )
+        if not retry_targets:
+            await self._bot.send_message(
+                chat_id,
+                texts.ADMIN_BROADCAST_NOTHING_TO_RETRY_TEXT,
+                reply_markup=self._broadcast_report_markup(
+                    await asyncio.to_thread(self._db_repository.finalize_broadcast, broadcast_id)
+                ),
+            )
+            return
+
+        await self._bot.send_message(chat_id, texts.ADMIN_BROADCAST_STARTED_TEXT)
+        progress = await self._run_broadcast(broadcast_id)
+        await self._bot.send_message(
+            chat_id,
+            self._build_broadcast_report(progress),
+            reply_markup=self._broadcast_report_markup(progress),
+        )
+
+    async def _run_broadcast(self, broadcast_id: int) -> BroadcastProgress:
+        """Выполнить отправку сохранённой рассылки и сохранить статусы доставки.
+
+        Args:
+            broadcast_id: Идентификатор сохранённой рассылки.
+
+        Returns:
+            Финальная агрегированная сводка по рассылке.
+
+        Raises:
+            RuntimeError: Если запись рассылки не найдена.
+        """
+        broadcast = await asyncio.to_thread(self._db_repository.fetch_broadcast, broadcast_id)
+        if broadcast is None:
+            raise RuntimeError(f"Рассылка #{broadcast_id} не найдена")
+
+        await asyncio.to_thread(self._db_repository.mark_broadcast_running, broadcast_id)
+        targets = await asyncio.to_thread(
+            self._db_repository.fetch_broadcast_delivery_targets,
+            broadcast_id,
+            (
+                BroadcastDeliveryStatus.PENDING,
+                BroadcastDeliveryStatus.RETRY,
+                BroadcastDeliveryStatus.FAILED,
+            ),
+        )
+
+        for target in targets:
+            try:
+                telegram_message_id = await self._deliver_broadcast_message(
+                    recipient_chat_id=target.chat_id,
+                    source_chat_id=broadcast.source_chat_id,
+                    message_id=broadcast.source_message_id,
+                    fallback_text=broadcast.text_preview,
+                )
+                await asyncio.to_thread(
+                    self._db_repository.mark_broadcast_delivery,
+                    target.delivery_id,
+                    BroadcastDeliveryStatus.SENT,
+                    telegram_message_id=telegram_message_id,
+                )
+            except TelegramForbiddenError as exc:
+                await asyncio.to_thread(
+                    self._db_repository.mark_broadcast_delivery,
+                    target.delivery_id,
+                    BroadcastDeliveryStatus.BLOCKED,
+                    error_text=str(exc),
+                )
+            except TelegramRetryAfter as exc:
+                await asyncio.sleep(float(exc.retry_after))
+                try:
+                    telegram_message_id = await self._deliver_broadcast_message(
+                        recipient_chat_id=target.chat_id,
+                        source_chat_id=broadcast.source_chat_id,
+                        message_id=broadcast.source_message_id,
+                        fallback_text=broadcast.text_preview,
+                    )
+                    await asyncio.to_thread(
+                        self._db_repository.mark_broadcast_delivery,
+                        target.delivery_id,
+                        BroadcastDeliveryStatus.SENT,
+                        telegram_message_id=telegram_message_id,
+                    )
+                except TelegramForbiddenError as retry_exc:
+                    await asyncio.to_thread(
+                        self._db_repository.mark_broadcast_delivery,
+                        target.delivery_id,
+                        BroadcastDeliveryStatus.BLOCKED,
+                        error_text=str(retry_exc),
+                    )
+                except TelegramBadRequest as retry_exc:
+                    await asyncio.to_thread(
+                        self._db_repository.mark_broadcast_delivery,
+                        target.delivery_id,
+                        BroadcastDeliveryStatus.FAILED,
+                        error_text=str(retry_exc),
+                    )
+                except TelegramRetryAfter as retry_exc:
+                    await asyncio.to_thread(
+                        self._db_repository.mark_broadcast_delivery,
+                        target.delivery_id,
+                        BroadcastDeliveryStatus.RETRY,
+                        error_text=str(retry_exc),
+                    )
+                except Exception as retry_exc:  # pragma: no cover
+                    logger.exception("Broadcast retry delivery failed")
+                    await asyncio.to_thread(
+                        self._db_repository.mark_broadcast_delivery,
+                        target.delivery_id,
+                        BroadcastDeliveryStatus.RETRY,
+                        error_text=str(retry_exc),
+                    )
+            except TelegramBadRequest as exc:
+                await asyncio.to_thread(
+                    self._db_repository.mark_broadcast_delivery,
+                    target.delivery_id,
+                    BroadcastDeliveryStatus.FAILED,
+                    error_text=str(exc),
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.exception("Broadcast delivery failed")
+                await asyncio.to_thread(
+                    self._db_repository.mark_broadcast_delivery,
+                    target.delivery_id,
+                    BroadcastDeliveryStatus.RETRY,
+                    error_text=str(exc),
+                )
+            await asyncio.sleep(0.1)
+
+        return await asyncio.to_thread(self._db_repository.finalize_broadcast, broadcast_id)
 
     async def _collect_broadcast_recipients(
         self,
         audience: BroadcastAudience,
         days: int | None,
-    ) -> list[TelegramUser]:
+    ) -> list[BroadcastRecipient]:
         if audience == BroadcastAudience.ALL:
             return await asyncio.to_thread(self._db_repository.fetch_broadcast_recipients_all)
         if audience == BroadcastAudience.WITH_ACTIONS:
@@ -1138,6 +1294,30 @@ class DictionaryBotHandlers:
             ]
         )
 
+    @staticmethod
+    def _broadcast_report_markup(progress: BroadcastProgress) -> InlineKeyboardMarkup:
+        """Собрать клавиатуру для итогового отчёта по рассылке.
+
+        Args:
+            progress: Финальная сводка по результатам рассылки.
+
+        Returns:
+            Клавиатура с повторной отправкой и возвратом в меню.
+        """
+        keyboard: list[list[InlineKeyboardButton]] = []
+        retryable_count = progress.retry_count + progress.failed_count + progress.pending_count
+        if retryable_count > 0:
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        text="Повторить недоставленным",
+                        callback_data=f"admin:broadcast:retry:{progress.broadcast_id}",
+                    )
+                ]
+            )
+        keyboard.append([InlineKeyboardButton(text="В меню", callback_data="admin:root")])
+        return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
     def _admin_entries_markup(self, offset: int, has_next: bool) -> InlineKeyboardMarkup:
         keyboard: list[list[InlineKeyboardButton]] = []
         pagination = self._build_pagination_row("admin:entries:page", offset, has_next)
@@ -1325,11 +1505,14 @@ class DictionaryBotHandlers:
         )
 
     @staticmethod
-    def _build_broadcast_report(success: int, blocked: int, errors: int) -> str:
+    def _build_broadcast_report(progress: BroadcastProgress) -> str:
         return texts.ADMIN_BROADCAST_REPORT_TEXT.format(
-            success=success,
-            blocked=blocked,
-            errors=errors,
+            broadcast_id=progress.broadcast_id,
+            total=progress.total_recipients,
+            success=progress.sent_count,
+            blocked=progress.blocked_count,
+            retryable=progress.retry_count + progress.failed_count + progress.pending_count,
+            errors=progress.failed_count,
         )
 
     @classmethod
@@ -1504,19 +1687,34 @@ class DictionaryBotHandlers:
         source_chat_id: int,
         message_id: int,
         fallback_text: str,
-    ) -> None:
+    ) -> int | None:
+        """Отправить одно сообщение рассылки конкретному пользователю.
+
+        Args:
+            recipient_chat_id: Chat ID адресата.
+            source_chat_id: Чат, из которого нужно скопировать исходное сообщение.
+            message_id: Идентификатор исходного сообщения.
+            fallback_text: Текст, который будет отправлен при неудачном `copy_message`.
+
+        Returns:
+            Идентификатор созданного сообщения Telegram, если его удалось определить.
+
+        Raises:
+            TelegramBadRequest: Если копирование не удалось и fallback-текст отсутствует.
+        """
         try:
-            await self._bot.copy_message(
+            result = await self._bot.copy_message(
                 chat_id=recipient_chat_id,
                 from_chat_id=source_chat_id,
                 message_id=message_id,
             )
-            return
+            return int(result.message_id)
         except TelegramBadRequest:
             if not fallback_text:
                 raise
 
-        await self._bot.send_message(recipient_chat_id, fallback_text)
+        message = await self._bot.send_message(recipient_chat_id, fallback_text)
+        return int(message.message_id)
 
     @staticmethod
     def _truncate_text(value: str, limit: int) -> str:

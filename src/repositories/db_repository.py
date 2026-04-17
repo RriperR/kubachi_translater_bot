@@ -11,13 +11,26 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from config import DatabaseConfig
-from models import AdminStats, AdminSuggestion, SearchMode, TelegramUser, UserProfileStats
+from models import (
+    AdminStats,
+    AdminSuggestion,
+    BroadcastAudience,
+    BroadcastDeliveryStatus,
+    BroadcastDeliveryTarget,
+    BroadcastProgress,
+    BroadcastRecipient,
+    BroadcastRecord,
+    BroadcastStatus,
+    SearchMode,
+    TelegramUser,
+    UserProfileStats,
+)
 
 
 class PostgresRepository:
     """Репозиторий для работы с таблицами приложения в PostgreSQL."""
 
-    _EXPECTED_SCHEMA_REVISION = "20260416_0011"
+    _EXPECTED_SCHEMA_REVISION = "20260417_0012"
 
     def __init__(self, config: DatabaseConfig) -> None:
         """Сохранить параметры подключения к базе данных.
@@ -64,7 +77,7 @@ class PostgresRepository:
             ):
                 raise RuntimeError(self._schema_error_message())
 
-            for table_name in ("dictionary_entries", "suggestions"):
+            for table_name in ("dictionary_entries", "suggestions", "broadcasts"):
                 cursor.execute(
                     """
                     SELECT 1
@@ -321,7 +334,7 @@ class PostgresRepository:
             for row in rows
         ]
 
-    def fetch_broadcast_recipients_all(self) -> list[TelegramUser]:
+    def fetch_broadcast_recipients_all(self) -> list[BroadcastRecipient]:
         """Получить всех пользователей бота для рассылки.
 
         Returns:
@@ -329,13 +342,13 @@ class PostgresRepository:
         """
         return self._fetch_recipients(
             """
-            SELECT chatid, username, firstname, lastname
+            SELECT id, chatid, username, firstname, lastname
             FROM users
             ORDER BY id
             """
         )
 
-    def fetch_broadcast_recipients_active(self, days: int) -> list[TelegramUser]:
+    def fetch_broadcast_recipients_active(self, days: int) -> list[BroadcastRecipient]:
         """Получить пользователей, активных за последние N дней.
 
         Args:
@@ -346,7 +359,7 @@ class PostgresRepository:
         """
         return self._fetch_recipients(
             """
-            SELECT chatid, username, firstname, lastname
+            SELECT id, chatid, username, firstname, lastname
             FROM users
             WHERE updated_at >= NOW() - (%s || ' days')::interval
             ORDER BY id
@@ -354,7 +367,7 @@ class PostgresRepository:
             (days,),
         )
 
-    def fetch_broadcast_recipients_with_actions(self) -> list[TelegramUser]:
+    def fetch_broadcast_recipients_with_actions(self) -> list[BroadcastRecipient]:
         """Получить пользователей, у которых есть хотя бы одно действие в журнале.
 
         Returns:
@@ -366,14 +379,357 @@ class PostgresRepository:
         ):
             cursor.execute(
                 """
-                SELECT DISTINCT users.chatid, users.username, users.firstname, users.lastname
+                SELECT DISTINCT
+                    users.id,
+                    users.chatid,
+                    users.username,
+                    users.firstname,
+                    users.lastname
                 FROM users
                 JOIN actions ON actions.fk_user = users.id
                 ORDER BY users.id
                 """
             )
             rows = cursor.fetchall()
-        return [self._row_to_user(row) for row in rows]
+        return [self._row_to_broadcast_recipient(row) for row in rows]
+
+    def create_broadcast(
+        self,
+        created_by_chat_id: int,
+        audience: BroadcastAudience,
+        audience_days: int | None,
+        source_chat_id: int,
+        source_message_id: int,
+        text_preview: str,
+        content_type: str,
+        recipients: list[BroadcastRecipient],
+    ) -> int:
+        """Создать задачу рассылки и зафиксировать снимок получателей.
+
+        Args:
+            created_by_chat_id: Chat ID администратора, запускающего рассылку.
+            audience: Тип аудитории рассылки.
+            audience_days: Размер окна активности в днях для выборки активных пользователей.
+            source_chat_id: Чат, из которого копируется исходное сообщение.
+            source_message_id: Идентификатор исходного сообщения для copy_message.
+            text_preview: Короткий текст или подпись рассылки для админского интерфейса.
+            content_type: Тип контента, например `текст`, `фото` или `файл`.
+            recipients: Снимок адресатов на момент запуска.
+
+        Returns:
+            Идентификатор созданной рассылки.
+
+        Raises:
+            RuntimeError: Если запись рассылки не удалось создать.
+        """
+        with self._connect() as connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    "SELECT id FROM users WHERE chatid = %s",
+                    (str(created_by_chat_id),),
+                )
+                author_row = cursor.fetchone()
+                created_by = int(author_row["id"]) if author_row is not None else None
+
+                cursor.execute(
+                    """
+                    INSERT INTO broadcasts (
+                        created_by,
+                        audience_type,
+                        audience_days,
+                        source_chat_id,
+                        source_message_id,
+                        text_preview,
+                        content_type,
+                        status,
+                        total_recipients
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        created_by,
+                        audience.value,
+                        audience_days,
+                        source_chat_id,
+                        source_message_id,
+                        text_preview,
+                        content_type,
+                        BroadcastStatus.DRAFT.value,
+                        len(recipients),
+                    ),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise RuntimeError("Не удалось создать рассылку")
+                broadcast_id = int(row["id"])
+
+                for recipient in recipients:
+                    cursor.execute(
+                        """
+                        INSERT INTO broadcast_deliveries (
+                            broadcast_id,
+                            user_id,
+                            chat_id,
+                            status
+                        )
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (
+                            broadcast_id,
+                            recipient.user_id,
+                            recipient.chat_id,
+                            BroadcastDeliveryStatus.PENDING.value,
+                        ),
+                    )
+            connection.commit()
+        return broadcast_id
+
+    def fetch_broadcast(self, broadcast_id: int) -> BroadcastRecord | None:
+        """Получить сохранённую задачу рассылки.
+
+        Args:
+            broadcast_id: Идентификатор рассылки.
+
+        Returns:
+            Описание рассылки или `None`, если запись не найдена.
+        """
+        with (
+            self._connect() as connection,
+            connection.cursor(cursor_factory=RealDictCursor) as cursor,
+        ):
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    created_by,
+                    audience_type,
+                    audience_days,
+                    source_chat_id,
+                    source_message_id,
+                    text_preview,
+                    content_type,
+                    status,
+                    total_recipients,
+                    sent_count,
+                    blocked_count,
+                    retry_count,
+                    failed_count
+                FROM broadcasts
+                WHERE id = %s
+                """,
+                (broadcast_id,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        return BroadcastRecord(
+            broadcast_id=int(row["id"]),
+            created_by_user_id=int(row["created_by"]) if row["created_by"] is not None else None,
+            audience=BroadcastAudience(str(row["audience_type"])),
+            audience_days=int(row["audience_days"]) if row["audience_days"] is not None else None,
+            source_chat_id=int(row["source_chat_id"]),
+            source_message_id=int(row["source_message_id"]),
+            text_preview=str(row["text_preview"] or ""),
+            content_type=str(row["content_type"]),
+            status=BroadcastStatus(str(row["status"])),
+            total_recipients=int(row["total_recipients"] or 0),
+            sent_count=int(row["sent_count"] or 0),
+            blocked_count=int(row["blocked_count"] or 0),
+            retry_count=int(row["retry_count"] or 0),
+            failed_count=int(row["failed_count"] or 0),
+        )
+
+    def mark_broadcast_running(self, broadcast_id: int) -> None:
+        """Перевести рассылку в состояние выполнения.
+
+        Args:
+            broadcast_id: Идентификатор рассылки.
+        """
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE broadcasts
+                    SET status = %s,
+                        started_at = COALESCE(started_at, NOW()),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (BroadcastStatus.RUNNING.value, broadcast_id),
+                )
+            connection.commit()
+
+    def fetch_broadcast_delivery_targets(
+        self,
+        broadcast_id: int,
+        statuses: tuple[BroadcastDeliveryStatus, ...],
+    ) -> list[BroadcastDeliveryTarget]:
+        """Получить адресатов сохранённой рассылки по набору статусов.
+
+        Args:
+            broadcast_id: Идентификатор рассылки.
+            statuses: Допустимые статусы доставки для выборки.
+
+        Returns:
+            Список адресатов, которым требуется отправка или повторная отправка.
+        """
+        with (
+            self._connect() as connection,
+            connection.cursor(cursor_factory=RealDictCursor) as cursor,
+        ):
+            cursor.execute(
+                """
+                SELECT id, broadcast_id, user_id, chat_id, attempts
+                FROM broadcast_deliveries
+                WHERE broadcast_id = %s
+                  AND status = ANY(%s)
+                ORDER BY id
+                """,
+                (broadcast_id, [status.value for status in statuses]),
+            )
+            rows = cursor.fetchall()
+        return [
+            BroadcastDeliveryTarget(
+                delivery_id=int(row["id"]),
+                broadcast_id=int(row["broadcast_id"]),
+                user_id=int(row["user_id"]) if row["user_id"] is not None else None,
+                chat_id=int(row["chat_id"]),
+                attempts=int(row["attempts"] or 0),
+            )
+            for row in rows
+        ]
+
+    def mark_broadcast_delivery(
+        self,
+        delivery_id: int,
+        status: BroadcastDeliveryStatus,
+        *,
+        error_text: str | None = None,
+        telegram_message_id: int | None = None,
+        next_retry_at: datetime | None = None,
+    ) -> None:
+        """Обновить результат доставки одному получателю.
+
+        Args:
+            delivery_id: Идентификатор записи доставки.
+            status: Итоговый статус попытки.
+            error_text: Краткое описание ошибки, если доставка не удалась.
+            telegram_message_id: Идентификатор созданного Telegram-сообщения.
+            next_retry_at: Момент, после которого запись можно пробовать снова.
+        """
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE broadcast_deliveries
+                    SET status = %s,
+                        attempts = attempts + 1,
+                        last_error = %s,
+                        telegram_message_id = %s,
+                        sent_at = CASE
+                            WHEN %s = %s THEN NOW()
+                            ELSE sent_at
+                        END,
+                        last_attempt_at = NOW(),
+                        next_retry_at = %s
+                    WHERE id = %s
+                    """,
+                    (
+                        status.value,
+                        error_text,
+                        telegram_message_id,
+                        status.value,
+                        BroadcastDeliveryStatus.SENT.value,
+                        next_retry_at,
+                        delivery_id,
+                    ),
+                )
+            connection.commit()
+
+    def finalize_broadcast(self, broadcast_id: int) -> BroadcastProgress:
+        """Пересчитать статистику рассылки и сохранить финальный статус.
+
+        Args:
+            broadcast_id: Идентификатор рассылки.
+
+        Returns:
+            Обновлённая агрегированная сводка по рассылке.
+        """
+        with self._connect() as connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (WHERE status = %s) AS sent_count,
+                        COUNT(*) FILTER (WHERE status = %s) AS blocked_count,
+                        COUNT(*) FILTER (WHERE status = %s) AS retry_count,
+                        COUNT(*) FILTER (WHERE status = %s) AS failed_count,
+                        COUNT(*) FILTER (WHERE status = %s) AS pending_count,
+                        COUNT(*) AS total_recipients
+                    FROM broadcast_deliveries
+                    WHERE broadcast_id = %s
+                    """,
+                    (
+                        BroadcastDeliveryStatus.SENT.value,
+                        BroadcastDeliveryStatus.BLOCKED.value,
+                        BroadcastDeliveryStatus.RETRY.value,
+                        BroadcastDeliveryStatus.FAILED.value,
+                        BroadcastDeliveryStatus.PENDING.value,
+                        broadcast_id,
+                    ),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    row = {
+                        "sent_count": 0,
+                        "blocked_count": 0,
+                        "retry_count": 0,
+                        "failed_count": 0,
+                        "pending_count": 0,
+                        "total_recipients": 0,
+                    }
+                retry_like_count = int(row["retry_count"] or 0) + int(row["failed_count"] or 0)
+                pending_count = int(row["pending_count"] or 0)
+                final_status = (
+                    BroadcastStatus.COMPLETED
+                    if retry_like_count == 0 and pending_count == 0
+                    else BroadcastStatus.COMPLETED_WITH_ERRORS
+                )
+                cursor.execute(
+                    """
+                    UPDATE broadcasts
+                    SET status = %s,
+                        updated_at = NOW(),
+                        completed_at = NOW(),
+                        total_recipients = %s,
+                        sent_count = %s,
+                        blocked_count = %s,
+                        retry_count = %s,
+                        failed_count = %s
+                    WHERE id = %s
+                    """,
+                    (
+                        final_status.value,
+                        int(row["total_recipients"] or 0),
+                        int(row["sent_count"] or 0),
+                        int(row["blocked_count"] or 0),
+                        int(row["retry_count"] or 0),
+                        int(row["failed_count"] or 0),
+                        broadcast_id,
+                    ),
+                )
+            connection.commit()
+        return BroadcastProgress(
+            broadcast_id=broadcast_id,
+            status=final_status,
+            total_recipients=int(row["total_recipients"] or 0),
+            sent_count=int(row["sent_count"] or 0),
+            blocked_count=int(row["blocked_count"] or 0),
+            retry_count=int(row["retry_count"] or 0),
+            failed_count=int(row["failed_count"] or 0),
+            pending_count=int(row["pending_count"] or 0),
+        )
 
     def fetch_admin_stats(self) -> AdminStats:
         """Собрать агрегированную статистику для админки.
@@ -558,22 +914,58 @@ class PostgresRepository:
             rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
-    def _fetch_recipients(self, query: str, params: tuple[object, ...] = ()) -> list[TelegramUser]:
+    def _fetch_recipients(
+        self,
+        query: str,
+        params: tuple[object, ...] = (),
+    ) -> list[BroadcastRecipient]:
+        """Выполнить запрос и преобразовать строки в получателей рассылки.
+
+        Args:
+            query: SQL-запрос, возвращающий данные пользователя.
+            params: Параметры SQL-запроса.
+
+        Returns:
+            Подготовленный список адресатов рассылки.
+        """
         with (
             self._connect() as connection,
             connection.cursor(cursor_factory=RealDictCursor) as cursor,
         ):
             cursor.execute(query, params)
             rows = cursor.fetchall()
-        return [self._row_to_user(row) for row in rows]
+        return [self._row_to_broadcast_recipient(row) for row in rows]
 
     @staticmethod
     def _row_to_user(row: dict[str, object]) -> TelegramUser:
+        """Преобразовать строку результата в доменную модель пользователя.
+
+        Args:
+            row: Словарь со столбцами SQL-запроса.
+
+        Returns:
+            Объект пользователя Telegram.
+        """
         return TelegramUser(
             chat_id=int(str(row["chatid"])),
             username=str(row["username"]) if row.get("username") is not None else None,
             first_name=str(row.get("firstname") or ""),
             last_name=str(row.get("lastname") or ""),
+        )
+
+    @classmethod
+    def _row_to_broadcast_recipient(cls, row: dict[str, object]) -> BroadcastRecipient:
+        """Преобразовать строку результата в получателя рассылки.
+
+        Args:
+            row: Словарь со столбцами SQL-запроса.
+
+        Returns:
+            Получатель рассылки с user_id и данными Telegram-пользователя.
+        """
+        return BroadcastRecipient(
+            user_id=int(str(row["id"])),
+            user=cls._row_to_user(row),
         )
 
     @staticmethod

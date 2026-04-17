@@ -7,7 +7,14 @@ from dataclasses import dataclass
 import pytest
 
 from bot.handlers import DictionaryBotHandlers
-from models import BroadcastAudience, DictionaryEntry, DictionarySource, TelegramUser
+from models import (
+    BroadcastAudience,
+    BroadcastProgress,
+    BroadcastStatus,
+    DictionaryEntry,
+    DictionarySource,
+    TelegramUser,
+)
 
 
 @dataclass(frozen=True)
@@ -38,11 +45,24 @@ def test_build_broadcast_report_formats_counts() -> None:
     """Отчет по рассылке должен показывать успехи, блокировки и ошибки."""
     helper = _require_helper("_build_broadcast_report")
 
-    report = _maybe_call(helper, success=12, blocked=3, errors=2)
+    report = _maybe_call(
+        helper,
+        BroadcastProgress(
+            broadcast_id=17,
+            status=BroadcastStatus.COMPLETED_WITH_ERRORS,
+            total_recipients=20,
+            sent_count=12,
+            blocked_count=3,
+            retry_count=2,
+            failed_count=2,
+            pending_count=1,
+        ),
+    )
 
     assert "12" in str(report)
     assert "3" in str(report)
     assert "2" in str(report)
+    assert "17" in str(report)
 
 
 def test_build_broadcast_confirmation_contains_recipient_count() -> None:

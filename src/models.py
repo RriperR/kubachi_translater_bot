@@ -43,6 +43,26 @@ class BroadcastAudience(str, Enum):
     WITH_ACTIONS = "with_actions"
 
 
+class BroadcastStatus(str, Enum):
+    """Состояние задачи рассылки."""
+
+    DRAFT = "draft"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
+    CANCELLED = "cancelled"
+
+
+class BroadcastDeliveryStatus(str, Enum):
+    """Состояние доставки конкретному пользователю."""
+
+    PENDING = "pending"
+    SENT = "sent"
+    BLOCKED = "blocked"
+    RETRY = "retry"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True)
 class TelegramUser:
     """Сведения о пользователе Telegram, нужные приложению."""
@@ -51,6 +71,68 @@ class TelegramUser:
     username: str | None
     first_name: str
     last_name: str = ""
+
+
+@dataclass(frozen=True)
+class BroadcastRecipient:
+    """Получатель рассылки со ссылкой на запись пользователя."""
+
+    user_id: int
+    user: TelegramUser
+
+    @property
+    def chat_id(self) -> int:
+        """Вернуть chat_id получателя.
+
+        Returns:
+            Идентификатор чата Telegram.
+        """
+        return self.user.chat_id
+
+
+@dataclass(frozen=True)
+class BroadcastRecord:
+    """Сохранённая задача рассылки."""
+
+    broadcast_id: int
+    created_by_user_id: int | None
+    audience: BroadcastAudience
+    audience_days: int | None
+    source_chat_id: int
+    source_message_id: int
+    text_preview: str
+    content_type: str
+    status: BroadcastStatus
+    total_recipients: int
+    sent_count: int
+    blocked_count: int
+    retry_count: int
+    failed_count: int
+
+
+@dataclass(frozen=True)
+class BroadcastDeliveryTarget:
+    """Адресат конкретной доставки внутри сохранённой рассылки."""
+
+    delivery_id: int
+    broadcast_id: int
+    user_id: int | None
+    chat_id: int
+    attempts: int
+
+
+@dataclass(frozen=True)
+class BroadcastProgress:
+    """Агрегированное состояние выполнения рассылки."""
+
+    broadcast_id: int
+    status: BroadcastStatus
+    total_recipients: int
+    sent_count: int
+    blocked_count: int
+    retry_count: int
+    failed_count: int
+    pending_count: int
 
 
 @dataclass(frozen=True)
