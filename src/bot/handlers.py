@@ -553,9 +553,9 @@ class DictionaryBotHandlers:
         )
         await state.set_state(AdminBroadcastFlow.confirm)
         data = await state.get_data()
+        await self._copy_broadcast_preview_from_state(message.chat.id, data)
         await message.answer(
             self._build_broadcast_confirmation(
-                str(data.get("admin_broadcast_text", "")),
                 BroadcastAudience.ACTIVE_DAYS,
                 days,
                 len(recipients),
@@ -563,7 +563,6 @@ class DictionaryBotHandlers:
             ),
             reply_markup=self._broadcast_confirm_markup(),
         )
-        await self._copy_broadcast_preview_from_state(message.chat.id, data)
 
     def _queue_admin_broadcast_media_group(self, message: Message, state: FSMContext) -> None:
         """Поставить альбом администратора в очередь на сборку и обработку.
@@ -897,9 +896,9 @@ class DictionaryBotHandlers:
         await state.update_data(admin_broadcast_recipient_count=len(recipients))
         await state.set_state(AdminBroadcastFlow.confirm)
         state_data = await state.get_data()
+        await self._copy_broadcast_preview_from_state(message.chat.id, state_data)
         await message.answer(
             self._build_broadcast_confirmation(
-                str(state_data.get("admin_broadcast_text", "")),
                 audience,
                 None,
                 len(recipients),
@@ -907,7 +906,6 @@ class DictionaryBotHandlers:
             ),
             reply_markup=self._broadcast_confirm_markup(),
         )
-        await self._copy_broadcast_preview_from_state(message.chat.id, state_data)
 
     async def _send_broadcast(self, chat_id: int, state: FSMContext) -> None:
         data = await state.get_data()
@@ -1576,7 +1574,6 @@ class DictionaryBotHandlers:
 
     @staticmethod
     def _build_broadcast_confirmation(
-        text_value: str,
         audience: BroadcastAudience,
         days: int | None,
         recipients_count: int,
@@ -1587,13 +1584,11 @@ class DictionaryBotHandlers:
             BroadcastAudience.ACTIVE_DAYS: f"активные за {days} дн.",
             BroadcastAudience.WITH_ACTIONS: "все, кто писал боту",
         }[audience]
-        text_block = text_value or "Без подписи"
         return (
             f"{texts.ADMIN_BROADCAST_CONFIRM_TITLE}\n\n"
             f"Аудитория: {audience_label}\n"
             f"Адресатов: {recipients_count}\n"
-            f"Тип сообщения: {content_label}\n\n"
-            f"{text_block}"
+            f"Тип сообщения: {content_label}"
         )
 
     @staticmethod

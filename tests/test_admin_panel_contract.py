@@ -71,7 +71,6 @@ def test_build_broadcast_confirmation_contains_recipient_count() -> None:
 
     confirmation = _maybe_call(
         helper,
-        text_value="Новость недели",
         audience=BroadcastAudience.ALL,
         days=None,
         recipients_count=42,
@@ -81,7 +80,7 @@ def test_build_broadcast_confirmation_contains_recipient_count() -> None:
     text = str(confirmation)
     assert "42" in text
     assert "текст" in text
-    assert "Новость недели" in text
+    assert "Новость недели" not in text
 
 
 def test_build_user_entry_card_contains_author_and_date() -> None:
