@@ -526,16 +526,8 @@ class DictionaryBotHandlers:
             admin_broadcast_content_label=self._describe_broadcast_content(message),
         )
         await message.answer(
-            self._build_broadcast_preview(
-                text_value=broadcast_text,
-                content_label=self._describe_broadcast_content(message),
-            ),
+            texts.ADMIN_BROADCAST_AUDIENCE_PROMPT,
             reply_markup=self._broadcast_audience_markup(),
-        )
-        await self._copy_broadcast_preview(
-            chat_id=message.chat.id,
-            source_chat_id=message.chat.id,
-            source_message_ids=[message.message_id],
         )
 
     async def _handle_admin_broadcast_days(self, message: Message, state: FSMContext) -> None:
@@ -644,16 +636,8 @@ class DictionaryBotHandlers:
             )
             await self._bot.send_message(
                 chat_id,
-                self._build_broadcast_preview(
-                    text_value=broadcast_text,
-                    content_label=content_label,
-                ),
+                texts.ADMIN_BROADCAST_AUDIENCE_PROMPT,
                 reply_markup=self._broadcast_audience_markup(),
-            )
-            await self._copy_broadcast_preview(
-                chat_id=chat_id,
-                source_chat_id=chat_id,
-                source_message_ids=source_message_ids,
             )
         except asyncio.CancelledError:
             raise
