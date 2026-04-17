@@ -30,7 +30,7 @@ from models import (
 class PostgresRepository:
     """Репозиторий для работы с таблицами приложения в PostgreSQL."""
 
-    _EXPECTED_SCHEMA_REVISION = "20260417_0012"
+    _EXPECTED_SCHEMA_REVISION = "20260417_0013"
 
     def __init__(self, config: DatabaseConfig) -> None:
         """Сохранить параметры подключения к базе данных.
@@ -399,7 +399,7 @@ class PostgresRepository:
         audience: BroadcastAudience,
         audience_days: int | None,
         source_chat_id: int,
-        source_message_id: int,
+        source_message_ids: list[int],
         text_preview: str,
         content_type: str,
         recipients: list[BroadcastRecipient],
@@ -411,7 +411,7 @@ class PostgresRepository:
             audience: Тип аудитории рассылки.
             audience_days: Размер окна активности в днях для выборки активных пользователей.
             source_chat_id: Чат, из которого копируется исходное сообщение.
-            source_message_id: Идентификатор исходного сообщения для copy_message.
+            source_message_ids: Идентификаторы исходных сообщений для copy_message/copy_messages.
             text_preview: Короткий текст или подпись рассылки для админского интерфейса.
             content_type: Тип контента, например `текст`, `фото` или `файл`.
             recipients: Снимок адресатов на момент запуска.
@@ -420,8 +420,11 @@ class PostgresRepository:
             Идентификатор созданной рассылки.
 
         Raises:
+            ValueError: Если список исходных сообщений пуст.
             RuntimeError: Если запись рассылки не удалось создать.
         """
+        if not source_message_ids:
+            raise ValueError("У рассылки должен быть хотя бы один исходный message_id")
         with self._connect() as connection:
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
@@ -438,13 +441,12 @@ class PostgresRepository:
                         audience_type,
                         audience_days,
                         source_chat_id,
-                        source_message_id,
                         text_preview,
                         content_type,
                         status,
                         total_recipients
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -452,7 +454,6 @@ class PostgresRepository:
                         audience.value,
                         audience_days,
                         source_chat_id,
-                        source_message_id,
                         text_preview,
                         content_type,
                         BroadcastStatus.DRAFT.value,
@@ -463,6 +464,19 @@ class PostgresRepository:
                 if row is None:
                     raise RuntimeError("Не удалось создать рассылку")
                 broadcast_id = int(row["id"])
+
+                for position, source_message_id in enumerate(source_message_ids):
+                    cursor.execute(
+                        """
+                        INSERT INTO broadcast_source_messages (
+                            broadcast_id,
+                            position,
+                            source_message_id
+                        )
+                        VALUES (%s, %s, %s)
+                        """,
+                        (broadcast_id, position, source_message_id),
+                    )
 
                 for recipient in recipients:
                     cursor.execute(
@@ -506,7 +520,6 @@ class PostgresRepository:
                     audience_type,
                     audience_days,
                     source_chat_id,
-                    source_message_id,
                     text_preview,
                     content_type,
                     status,
@@ -521,15 +534,27 @@ class PostgresRepository:
                 (broadcast_id,),
             )
             row = cursor.fetchone()
-        if row is None:
-            return None
+            if row is None:
+                return None
+            cursor.execute(
+                """
+                SELECT source_message_id
+                FROM broadcast_source_messages
+                WHERE broadcast_id = %s
+                ORDER BY position
+                """,
+                (broadcast_id,),
+            )
+            source_rows = cursor.fetchall()
         return BroadcastRecord(
             broadcast_id=int(row["id"]),
             created_by_user_id=int(row["created_by"]) if row["created_by"] is not None else None,
             audience=BroadcastAudience(str(row["audience_type"])),
             audience_days=int(row["audience_days"]) if row["audience_days"] is not None else None,
             source_chat_id=int(row["source_chat_id"]),
-            source_message_id=int(row["source_message_id"]),
+            source_message_ids=tuple(
+                int(source_row["source_message_id"]) for source_row in source_rows
+            ),
             text_preview=str(row["text_preview"] or ""),
             content_type=str(row["content_type"]),
             status=BroadcastStatus(str(row["status"])),

@@ -99,7 +99,7 @@ class BroadcastRecord:
     audience: BroadcastAudience
     audience_days: int | None
     source_chat_id: int
-    source_message_id: int
+    source_message_ids: tuple[int, ...]
     text_preview: str
     content_type: str
     status: BroadcastStatus

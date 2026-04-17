@@ -203,7 +203,7 @@ def test_create_broadcast_saves_snapshot_of_recipients() -> None:
         audience=BroadcastAudience.ALL,
         audience_days=None,
         source_chat_id=123456,
-        source_message_id=99,
+        source_message_ids=[99, 100],
         text_preview="Новость",
         content_type="текст",
         recipients=recipients,
@@ -212,6 +212,9 @@ def test_create_broadcast_saves_snapshot_of_recipients() -> None:
     assert broadcast_id == 77
     assert connection.commits == 1
     assert any("INSERT INTO broadcasts" in query for query, _ in cursor.executed)
+    assert sum(
+        1 for query, _ in cursor.executed if "INSERT INTO broadcast_source_messages" in query
+    ) == 2
     assert sum(
         1 for query, params in cursor.executed if "INSERT INTO broadcast_deliveries" in query
     ) == 2

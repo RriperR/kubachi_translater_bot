@@ -80,6 +80,8 @@ class DictionaryBotHandlers:
         self._search_service = runtime.search_service
         self._export_service = runtime.export_service
         self._session_store = session_store
+        self._pending_broadcast_media_groups: dict[tuple[int, str], list[Message]] = {}
+        self._pending_broadcast_media_group_tasks: dict[tuple[int, str], asyncio.Task[None]] = {}
 
     def register(self, router: Router) -> None:
         """Зарегистрировать все обработчики на router.
@@ -513,11 +515,14 @@ class DictionaryBotHandlers:
         if not self._supports_broadcast_message(message):
             await message.answer(texts.ADMIN_BROADCAST_UNSUPPORTED_TEXT)
             return
+        if message.media_group_id:
+            self._queue_admin_broadcast_media_group(message, state)
+            return
         broadcast_text = self._extract_broadcast_text(message)
         await state.update_data(admin_broadcast_text=broadcast_text)
         await state.update_data(
             admin_broadcast_source_chat_id=message.chat.id,
-            admin_broadcast_message_id=message.message_id,
+            admin_broadcast_source_message_ids=[message.message_id],
             admin_broadcast_content_label=self._describe_broadcast_content(message),
         )
         await message.answer(
@@ -530,7 +535,7 @@ class DictionaryBotHandlers:
         await self._copy_broadcast_preview(
             chat_id=message.chat.id,
             source_chat_id=message.chat.id,
-            message_id=message.message_id,
+            source_message_ids=[message.message_id],
         )
 
     async def _handle_admin_broadcast_days(self, message: Message, state: FSMContext) -> None:
@@ -567,6 +572,93 @@ class DictionaryBotHandlers:
             reply_markup=self._broadcast_confirm_markup(),
         )
         await self._copy_broadcast_preview_from_state(message.chat.id, data)
+
+    def _queue_admin_broadcast_media_group(self, message: Message, state: FSMContext) -> None:
+        """Поставить альбом администратора в очередь на сборку и обработку.
+
+        Args:
+            message: Очередное сообщение из media group.
+            state: Контекст FSM админской рассылки.
+        """
+        media_group_id = message.media_group_id
+        if media_group_id is None:
+            return
+        key = (message.chat.id, media_group_id)
+        items = self._pending_broadcast_media_groups.setdefault(key, [])
+        items.append(message)
+
+        existing_task = self._pending_broadcast_media_group_tasks.get(key)
+        if existing_task is not None:
+            existing_task.cancel()
+
+        task = asyncio.create_task(
+            self._finalize_admin_broadcast_media_group(
+                chat_id=message.chat.id,
+                media_group_id=media_group_id,
+                state=state,
+            )
+        )
+        task.add_done_callback(
+            lambda finished_task: self._log_pending_task_exception(finished_task)
+        )
+        self._pending_broadcast_media_group_tasks[key] = task
+
+    async def _finalize_admin_broadcast_media_group(
+        self,
+        chat_id: int,
+        media_group_id: str,
+        state: FSMContext,
+    ) -> None:
+        """Дождаться завершения альбома и сохранить его как одну рассылку.
+
+        Args:
+            chat_id: Chat ID администратора.
+            media_group_id: Идентификатор Telegram media group.
+            state: Контекст FSM админской рассылки.
+
+        Raises:
+            asyncio.CancelledError: Если ожидание альбома было прервано новой задачей.
+        """
+        key = (chat_id, media_group_id)
+        try:
+            await asyncio.sleep(0.7)
+            messages = self._pending_broadcast_media_groups.pop(key, [])
+            if not messages:
+                return
+            ordered_messages = sorted(messages, key=lambda item: item.message_id)
+            source_message_ids = [item.message_id for item in ordered_messages]
+            broadcast_text = next(
+                (
+                    self._extract_broadcast_text(item)
+                    for item in ordered_messages
+                    if self._extract_broadcast_text(item)
+                ),
+                "",
+            )
+            content_label = self._describe_broadcast_media_group(ordered_messages)
+            await state.update_data(
+                admin_broadcast_text=broadcast_text,
+                admin_broadcast_source_chat_id=chat_id,
+                admin_broadcast_source_message_ids=source_message_ids,
+                admin_broadcast_content_label=content_label,
+            )
+            await self._bot.send_message(
+                chat_id,
+                self._build_broadcast_preview(
+                    text_value=broadcast_text,
+                    content_label=content_label,
+                ),
+                reply_markup=self._broadcast_audience_markup(),
+            )
+            await self._copy_broadcast_preview(
+                chat_id=chat_id,
+                source_chat_id=chat_id,
+                source_message_ids=source_message_ids,
+            )
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._pending_broadcast_media_group_tasks.pop(key, None)
 
     async def _handle_admin_entry_input(self, message: Message, state: FSMContext) -> None:
         if not self._is_admin(message.chat.id):
@@ -784,6 +876,20 @@ class DictionaryBotHandlers:
         except Exception:  # pragma: no cover
             logger.exception("Failed to notify admin")
 
+    @staticmethod
+    def _log_pending_task_exception(task: asyncio.Task[None]) -> None:
+        """Залогировать исключение фоновой задачи, если оно произошло.
+
+        Args:
+            task: Завершённая фоновая задача.
+        """
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception:  # pragma: no cover
+            logger.exception("Background admin task failed")
+
     async def _handle_broadcast_audience_callback(
         self,
         message: Message,
@@ -823,9 +929,11 @@ class DictionaryBotHandlers:
         data = await state.get_data()
         broadcast_text = str(data.get("admin_broadcast_text") or "").strip()
         source_chat_id = data.get("admin_broadcast_source_chat_id")
-        message_id = data.get("admin_broadcast_message_id")
+        source_message_ids = self._normalize_source_message_ids(
+            data.get("admin_broadcast_source_message_ids")
+        )
         audience_raw = data.get("admin_broadcast_audience")
-        if audience_raw is None or source_chat_id is None or message_id is None:
+        if audience_raw is None or source_chat_id is None or not source_message_ids:
             await state.clear()
             await self._bot.send_message(
                 chat_id,
@@ -852,7 +960,7 @@ class DictionaryBotHandlers:
             audience,
             days,
             int(source_chat_id),
-            int(message_id),
+            source_message_ids,
             broadcast_text,
             str(data.get("admin_broadcast_content_label") or "сообщение"),
             recipients,
@@ -946,7 +1054,7 @@ class DictionaryBotHandlers:
                 telegram_message_id = await self._deliver_broadcast_message(
                     recipient_chat_id=target.chat_id,
                     source_chat_id=broadcast.source_chat_id,
-                    message_id=broadcast.source_message_id,
+                    source_message_ids=broadcast.source_message_ids,
                     fallback_text=broadcast.text_preview,
                 )
                 await asyncio.to_thread(
@@ -968,7 +1076,7 @@ class DictionaryBotHandlers:
                     telegram_message_id = await self._deliver_broadcast_message(
                         recipient_chat_id=target.chat_id,
                         source_chat_id=broadcast.source_chat_id,
-                        message_id=broadcast.source_message_id,
+                        source_message_ids=broadcast.source_message_ids,
                         fallback_text=broadcast.text_preview,
                     )
                     await asyncio.to_thread(
@@ -1655,29 +1763,74 @@ class DictionaryBotHandlers:
             return "файл"
         return "текст"
 
+    @classmethod
+    def _describe_broadcast_media_group(cls, messages: list[Message]) -> str:
+        """Сформировать описание типа контента для media group.
+
+        Args:
+            messages: Сообщения из одного Telegram-альбома.
+
+        Returns:
+            Короткое описание альбома для превью и подтверждения рассылки.
+        """
+        photo_count = sum(1 for item in messages if item.photo)
+        document_count = sum(1 for item in messages if item.document)
+        if photo_count:
+            suffix = "изображение" if photo_count == 1 else "изображения"
+            return f"альбом ({photo_count} {suffix})"
+        if document_count:
+            suffix = "файл" if document_count == 1 else "файла"
+            return f"альбом ({document_count} {suffix})"
+        return f"альбом ({len(messages)} элементов)"
+
+    @staticmethod
+    def _normalize_source_message_ids(value: object) -> list[int]:
+        """Преобразовать данные состояния в список исходных message_id.
+
+        Args:
+            value: Значение из FSM state.
+
+        Returns:
+            Список идентификаторов сообщений без пустых значений.
+        """
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            return [int(item) for item in value]
+        return [int(str(value))]
+
     async def _copy_broadcast_preview_from_state(self, chat_id: int, data: dict[str, Any]) -> None:
         source_chat_id = data.get("admin_broadcast_source_chat_id")
-        message_id = data.get("admin_broadcast_message_id")
-        if source_chat_id is None or message_id is None:
+        source_message_ids = self._normalize_source_message_ids(
+            data.get("admin_broadcast_source_message_ids")
+        )
+        if source_chat_id is None or not source_message_ids:
             return
         await self._copy_broadcast_preview(
             chat_id=chat_id,
             source_chat_id=int(source_chat_id),
-            message_id=int(message_id),
+            source_message_ids=source_message_ids,
         )
 
     async def _copy_broadcast_preview(
         self,
         chat_id: int,
         source_chat_id: int,
-        message_id: int,
+        source_message_ids: list[int],
     ) -> None:
         try:
-            await self._bot.copy_message(
-                chat_id=chat_id,
-                from_chat_id=source_chat_id,
-                message_id=message_id,
-            )
+            if len(source_message_ids) > 1:
+                await self._bot.copy_messages(
+                    chat_id=chat_id,
+                    from_chat_id=source_chat_id,
+                    message_ids=source_message_ids,
+                )
+            else:
+                await self._bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=source_chat_id,
+                    message_id=source_message_ids[0],
+                )
         except TelegramBadRequest:
             logger.exception("Failed to copy broadcast preview")
 
@@ -1685,7 +1838,7 @@ class DictionaryBotHandlers:
         self,
         recipient_chat_id: int,
         source_chat_id: int,
-        message_id: int,
+        source_message_ids: tuple[int, ...],
         fallback_text: str,
     ) -> int | None:
         """Отправить одно сообщение рассылки конкретному пользователю.
@@ -1693,7 +1846,7 @@ class DictionaryBotHandlers:
         Args:
             recipient_chat_id: Chat ID адресата.
             source_chat_id: Чат, из которого нужно скопировать исходное сообщение.
-            message_id: Идентификатор исходного сообщения.
+            source_message_ids: Идентификаторы исходных сообщений.
             fallback_text: Текст, который будет отправлен при неудачном `copy_message`.
 
         Returns:
@@ -1703,14 +1856,23 @@ class DictionaryBotHandlers:
             TelegramBadRequest: Если копирование не удалось и fallback-текст отсутствует.
         """
         try:
+            if len(source_message_ids) > 1:
+                results = await self._bot.copy_messages(
+                    chat_id=recipient_chat_id,
+                    from_chat_id=source_chat_id,
+                    message_ids=list(source_message_ids),
+                )
+                if not results:
+                    return None
+                return int(results[0].message_id)
             result = await self._bot.copy_message(
                 chat_id=recipient_chat_id,
                 from_chat_id=source_chat_id,
-                message_id=message_id,
+                message_id=source_message_ids[0],
             )
             return int(result.message_id)
         except TelegramBadRequest:
-            if not fallback_text:
+            if len(source_message_ids) > 1 or not fallback_text:
                 raise
 
         message = await self._bot.send_message(recipient_chat_id, fallback_text)
