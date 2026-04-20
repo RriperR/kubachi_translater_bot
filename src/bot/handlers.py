@@ -782,6 +782,10 @@ class DictionaryBotHandlers:
             return
 
         if not entries:
+            await self._notify_admin(
+                f'По запросу "{query}" для пользователя {self._format_actor(message)} '
+                f"ничего не найдено (режим: {mode.value})"
+            )
             not_found_text = (
                 texts.SEARCH_NOT_FOUND_COMPLEX_TEXT
                 if mode == SearchMode.COMPLEX
