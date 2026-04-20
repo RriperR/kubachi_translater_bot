@@ -118,6 +118,10 @@ class DictionaryBotHandlers:
 
         router.callback_query.register(self._handle_mode_callback, F.data.startswith("mode:"))
         router.callback_query.register(self._handle_page_callback, F.data.startswith("page:"))
+        router.callback_query.register(
+            self._handle_suggestion_callback,
+            F.data.startswith("suggest:"),
+        )
         router.callback_query.register(self._handle_admin_callback, F.data.startswith("admin:"))
         router.message.register(self._handle_search, F.text & ~F.text.startswith("/"))
 
@@ -315,7 +319,10 @@ class DictionaryBotHandlers:
 
         await state.clear()
         await state.set_state(SuggestionFlow.text)
-        await message.answer(texts.SUGGEST_PROMPT_TEXT)
+        await message.answer(
+            texts.SUGGEST_PROMPT_TEXT,
+            reply_markup=self._suggest_cancel_markup(),
+        )
 
     async def _handle_suggestion_text(self, message: Message, state: FSMContext) -> None:
         suggestion_text = (message.text or "").strip()
@@ -347,6 +354,27 @@ class DictionaryBotHandlers:
             await self._handle_failure(message.chat.id, exc)
         finally:
             await state.clear()
+
+    async def _handle_suggestion_callback(
+        self,
+        callback: CallbackQuery,
+        state: FSMContext,
+    ) -> None:
+        """Обработать inline-действия сценария `/suggest`.
+
+        Args:
+            callback: CallbackQuery от inline-кнопки.
+            state: FSM-контекст текущего пользователя.
+        """
+        await callback.answer()
+        message_obj = callback.message
+        if not isinstance(message_obj, Message):
+            return
+        if callback.data != "suggest:cancel":
+            return
+
+        await state.clear()
+        await message_obj.answer(texts.SUGGEST_CANCELLED_TEXT)
 
     async def _handle_admin_callback(self, callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
@@ -1374,6 +1402,24 @@ class DictionaryBotHandlers:
                     InlineKeyboardButton(text="Статистика", callback_data="admin:stats"),
                 ],
                 [InlineKeyboardButton(text="Предложения", callback_data="admin:suggestions")],
+            ]
+        )
+
+    @staticmethod
+    def _suggest_cancel_markup() -> InlineKeyboardMarkup:
+        """Собрать клавиатуру отмены для сценария `/suggest`.
+
+        Returns:
+            Inline-клавиатура с единственной кнопкой отмены.
+        """
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=texts.SUGGEST_CANCEL_BUTTON_TEXT,
+                        callback_data="suggest:cancel",
+                    )
+                ]
             ]
         )
 
