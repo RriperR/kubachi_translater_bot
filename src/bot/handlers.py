@@ -127,9 +127,6 @@ class DictionaryBotHandlers:
         await self._track_message(message, "/start")
         await message.answer(texts.WELCOME_TEXT)
         await message.answer(texts.ENTER_WORD_TEXT)
-        await self._notify_admin(
-            f"Пользователь {self._format_actor(message)} использовал команду /start"
-        )
 
     async def _handle_restart(self, message: Message, state: FSMContext) -> None:
         await state.clear()
@@ -137,9 +134,6 @@ class DictionaryBotHandlers:
         await self._track_message(message, "/restart")
         await message.answer(texts.WELCOME_TEXT)
         await message.answer(texts.ENTER_WORD_TEXT)
-        await self._notify_admin(
-            f"Пользователь {self._format_actor(message)} использовал команду /restart"
-        )
 
     async def _handle_help(self, message: Message) -> None:
         await self._track_message(message, "/help")
@@ -163,6 +157,7 @@ class DictionaryBotHandlers:
         await message.answer(self._build_user_profile_summary(profile))
 
     async def _handle_chat_id(self, message: Message) -> None:
+        await self._track_message(message, "/chatid")
         await message.answer(f"Ваш chat_id: {message.chat.id}")
 
     async def _handle_getdb(self, message: Message) -> None:
@@ -837,6 +832,10 @@ class DictionaryBotHandlers:
         try:
             await asyncio.to_thread(self._db_repository.ensure_user, actor)
             await asyncio.to_thread(self._db_repository.log_action, action, actor.chat_id)
+            if action.startswith("/"):
+                await self._notify_admin(
+                    f"Пользователь {self._format_actor(message)} использовал команду {action}"
+                )
         except Exception as exc:  # pragma: no cover
             logger.exception("Failed to track message")
             await self._notify_admin(f"Ошибка логирования: {exc}")
