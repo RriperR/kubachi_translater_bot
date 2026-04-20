@@ -737,6 +737,10 @@ class DictionaryBotHandlers:
         try:
             await asyncio.to_thread(self._db_repository.ensure_user, actor)
             await asyncio.to_thread(self._db_repository.update_user_mode, actor.chat_id, mode)
+            await self._notify_admin(
+                f"Пользователь {self._format_actor_from_callback(callback)} "
+                f"переключил режим на {mode.value}"
+            )
             await source_message.answer(
                 texts.MODE_COMPLEX_TEXT if mode == SearchMode.COMPLEX else texts.MODE_LITE_TEXT
             )
@@ -765,11 +769,12 @@ class DictionaryBotHandlers:
             return
 
         actor = self._extract_actor(message)
-        await self._notify_admin(f'Пользователь {self._format_actor(message)} ищет "{query}"')
-
         try:
             await asyncio.to_thread(self._db_repository.ensure_user, actor)
             mode = await asyncio.to_thread(self._db_repository.get_user_mode, message.chat.id)
+            await self._notify_admin(
+                f'Пользователь {self._format_actor(message)} ищет "{query}" (режим: {mode.value})'
+            )
             entries = await asyncio.to_thread(self._search_service.search, query, mode)
             await asyncio.to_thread(
                 self._db_repository.log_search_query,
