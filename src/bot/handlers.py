@@ -738,7 +738,7 @@ class DictionaryBotHandlers:
             await asyncio.to_thread(self._db_repository.ensure_user, actor)
             await asyncio.to_thread(self._db_repository.update_user_mode, actor.chat_id, mode)
             await self._notify_admin(
-                f"Пользователь {self._format_actor_from_callback(callback)} "
+                f"Пользователь {self._format_user_actor(actor)} "
                 f"переключил режим на {mode.value}"
             )
             await source_message.answer(
@@ -1348,6 +1348,19 @@ class DictionaryBotHandlers:
             return str(message.chat.id)
         username = f"@{from_user.username}" if from_user.username else str(message.chat.id)
         return f'{username} "{from_user.first_name}"'
+
+    @staticmethod
+    def _format_user_actor(user: TelegramUser) -> str:
+        """Сформатировать доменную модель пользователя для логов.
+
+        Args:
+            user: Пользователь Telegram.
+
+        Returns:
+            Короткая строка для сообщений в чат логов.
+        """
+        username = f"@{user.username}" if user.username else str(user.chat_id)
+        return f'{username} "{user.first_name}"'
 
     def _admin_root_markup(self) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
