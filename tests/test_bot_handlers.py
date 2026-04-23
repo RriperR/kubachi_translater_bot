@@ -98,3 +98,40 @@ def test_build_admin_commands_extends_default_commands() -> None:
         "Открыть админку",
         "Показать chat_id",
     ]
+
+
+def test_build_search_error_context_contains_actor_and_query() -> None:
+    """Контекст поисковой ошибки должен сохранять chat_id, username и запрос."""
+    actor = TelegramUser(
+        chat_id=123456,
+        username="tester",
+        first_name="Иван",
+        last_name="Петров",
+    )
+
+    context = DictionaryBotHandlers._build_search_error_context(
+        actor,
+        "  мастер   по   серебру  ",
+    )
+
+    assert "chat_id=123456" in context
+    assert "username=@tester" in context
+    assert 'name="Иван Петров"' in context
+    assert 'query="мастер по серебру"' in context
+
+
+def test_build_action_error_context_falls_back_without_username() -> None:
+    """Контекст команды должен сохранять action и работать без username."""
+    actor = TelegramUser(
+        chat_id=777,
+        username=None,
+        first_name="Салам",
+        last_name="",
+    )
+
+    context = DictionaryBotHandlers._build_action_error_context(actor, " /mode ")
+
+    assert "chat_id=777" in context
+    assert "username=-" in context
+    assert 'name="Салам"' in context
+    assert 'action="/mode"' in context

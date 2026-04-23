@@ -766,8 +766,7 @@ class DictionaryBotHandlers:
             await asyncio.to_thread(self._db_repository.ensure_user, actor)
             await asyncio.to_thread(self._db_repository.update_user_mode, actor.chat_id, mode)
             await self._notify_admin(
-                f"Пользователь {self._format_user_actor(actor)} "
-                f"переключил режим на {mode.value}"
+                f"Пользователь {self._format_user_actor(actor)} переключил режим на {mode.value}"
             )
             await source_message.answer(
                 texts.MODE_COMPLEX_TEXT if mode == SearchMode.COMPLEX else texts.MODE_LITE_TEXT
@@ -797,6 +796,8 @@ class DictionaryBotHandlers:
             return
 
         actor = self._extract_actor(message)
+        search_context = self._build_search_error_context(actor, query)
+        logger.info("Incoming search: %s", search_context)
         try:
             await asyncio.to_thread(self._db_repository.ensure_user, actor)
             mode = await asyncio.to_thread(self._db_repository.get_user_mode, message.chat.id)
@@ -811,7 +812,7 @@ class DictionaryBotHandlers:
                 bool(entries),
             )
         except Exception as exc:  # pragma: no cover
-            await self._handle_failure(message.chat.id, exc)
+            await self._handle_failure(message.chat.id, exc, context=search_context)
             return
 
         if not entries:
@@ -866,6 +867,8 @@ class DictionaryBotHandlers:
 
     async def _track_message(self, message: Message, action: str) -> None:
         actor = self._extract_actor(message)
+        action_context = self._build_action_error_context(actor, action)
+        logger.info("Incoming action: %s", action_context)
         try:
             await asyncio.to_thread(self._db_repository.ensure_user, actor)
             await asyncio.to_thread(self._db_repository.log_action, action, actor.chat_id)
@@ -874,17 +877,22 @@ class DictionaryBotHandlers:
                     f"Пользователь {self._format_actor(message)} использовал команду {action}"
                 )
         except Exception as exc:  # pragma: no cover
-            logger.exception("Failed to track message")
-            await self._notify_admin(f"Ошибка логирования: {exc}")
+            logger.exception("Failed to track message (%s)", action_context)
+            await self._notify_admin(f"Ошибка логирования: {action_context}\n{exc}")
 
     async def _handle_failure(
         self,
         chat_id: int,
         exc: Exception,
         user_message: str = texts.GENERIC_ERROR_TEXT,
+        context: str | None = None,
     ) -> None:
-        logger.exception("Bot handler failed")
-        await self._notify_admin(f"Ошибка: {exc}")
+        if context:
+            logger.exception("Bot handler failed (%s)", context)
+            await self._notify_admin(f"Ошибка: {context}\n{exc}")
+        else:
+            logger.exception("Bot handler failed")
+            await self._notify_admin(f"Ошибка: {exc}")
         await self._bot.send_message(chat_id, user_message)
 
     async def _notify_admin(self, text: str) -> None:
@@ -1389,6 +1397,23 @@ class DictionaryBotHandlers:
         """
         username = f"@{user.username}" if user.username else str(user.chat_id)
         return f'{username} "{user.first_name}"'
+
+    @staticmethod
+    def _format_actor_debug(user: TelegramUser) -> str:
+        username = f"@{user.username}" if user.username else "-"
+        full_name = " ".join(part for part in (user.first_name, user.last_name) if part).strip()
+        name = full_name or user.first_name or "-"
+        return f'chat_id={user.chat_id}, username={username}, name="{name}"'
+
+    @classmethod
+    def _build_search_error_context(cls, actor: TelegramUser, query: str) -> str:
+        safe_query = " ".join(query.split())
+        return f'{cls._format_actor_debug(actor)}, query="{safe_query}"'
+
+    @classmethod
+    def _build_action_error_context(cls, actor: TelegramUser, action: str) -> str:
+        safe_action = " ".join(action.split())
+        return f'{cls._format_actor_debug(actor)}, action="{safe_action}"'
 
     def _admin_root_markup(self) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
