@@ -21,6 +21,9 @@ from models import (
     BroadcastRecipient,
     BroadcastRecord,
     BroadcastStatus,
+    ScoreBoard,
+    ScoreEntry,
+    ScoreNamePolicy,
     SearchMode,
     TelegramUser,
     UserProfileStats,
@@ -30,7 +33,7 @@ from models import (
 class PostgresRepository:
     """Репозиторий для работы с таблицами приложения в PostgreSQL."""
 
-    _EXPECTED_SCHEMA_REVISION = "20260417_0013"
+    _EXPECTED_SCHEMA_REVISION = "20260423_0014"
 
     def __init__(self, config: DatabaseConfig) -> None:
         """Сохранить параметры подключения к базе данных.
@@ -875,6 +878,89 @@ class PostgresRepository:
             suggestions_count=int(user_row.get("suggestions_count") or 0),
         )
 
+    def fetch_scoreboard(self, chat_id: int, limit: int = 10) -> ScoreBoard:
+        """Собрать таблицы лучших по пользовательским счётчикам.
+
+        Args:
+            chat_id: Идентификатор Telegram-чата текущего пользователя.
+            limit: Число строк в каждом рейтинге.
+
+        Returns:
+            Таблицы лучших и личные места текущего пользователя вне топа.
+        """
+        categories = {
+            "searches": "searches_count",
+            "user_entries": "user_entries_count",
+            "comments": "comments_count",
+            "suggestions": "suggestions_count",
+        }
+        with (
+            self._connect() as connection,
+            connection.cursor(cursor_factory=RealDictCursor) as cursor,
+        ):
+            category_rows = {
+                category: self._fetch_score_rows(cursor, counter_column, chat_id, limit)
+                for category, counter_column in categories.items()
+            }
+
+        parsed = {
+            category: tuple(
+                self._row_to_score_entry(row, chat_id, personal=False)
+                for row in rows
+                if not bool(row.get("is_personal"))
+            )
+            for category, rows in category_rows.items()
+        }
+        personal = {
+            category: next(
+                (
+                    self._row_to_score_entry(row, chat_id, personal=True)
+                    for row in rows
+                    if bool(row.get("is_personal"))
+                ),
+                None,
+            )
+            for category, rows in category_rows.items()
+        }
+        return ScoreBoard(
+            searches=parsed["searches"],
+            user_entries=parsed["user_entries"],
+            comments=parsed["comments"],
+            suggestions=parsed["suggestions"],
+            personal_searches=personal["searches"],
+            personal_user_entries=personal["user_entries"],
+            personal_comments=personal["comments"],
+            personal_suggestions=personal["suggestions"],
+        )
+
+    def update_score_display_name(
+        self,
+        chat_id: int,
+        policy: ScoreNamePolicy,
+        custom_name: str | None,
+    ) -> None:
+        """Обновить публичную настройку имени для таблицы лучших.
+
+        Args:
+            chat_id: Идентификатор Telegram-чата пользователя.
+            policy: Способ отображения имени.
+            custom_name: Пользовательский псевдоним для политики `custom`.
+        """
+        stored_custom_name = custom_name if policy == ScoreNamePolicy.CUSTOM else None
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE users
+                    SET score_name_policy = %s,
+                        score_custom_name = %s,
+                        updated_at = NOW()
+                    WHERE chatid = %s
+                    """,
+                    (policy.value, stored_custom_name, str(chat_id)),
+                )
+            connection.commit()
+
     def get_user_mode(self, chat_id: int) -> SearchMode:
         """Получить текущий режим поиска пользователя.
 
@@ -962,6 +1048,73 @@ class PostgresRepository:
         return [self._row_to_broadcast_recipient(row) for row in rows]
 
     @staticmethod
+    def _fetch_score_rows(
+        cursor: Any,
+        counter_column: str,
+        chat_id: int,
+        limit: int,
+    ) -> list[dict[str, object]]:
+        allowed_columns = {
+            "searches_count",
+            "user_entries_count",
+            "comments_count",
+            "suggestions_count",
+        }
+        if counter_column not in allowed_columns:
+            raise ValueError("Недопустимая колонка рейтинга")
+
+        query = """
+            WITH ranked AS (
+                SELECT
+                    id,
+                    chatid,
+                    username,
+                    firstname,
+                    lastname,
+                    score_name_policy,
+                    score_custom_name,
+                    __COUNTER_COLUMN__ AS value,
+                    ROW_NUMBER() OVER (ORDER BY __COUNTER_COLUMN__ DESC, id ASC) AS rank
+                FROM users
+                WHERE __COUNTER_COLUMN__ > 0
+            )
+            SELECT
+                id,
+                chatid,
+                username,
+                firstname,
+                lastname,
+                score_name_policy,
+                score_custom_name,
+                value,
+                rank,
+                FALSE AS is_personal
+            FROM ranked
+            WHERE rank <= %s
+            UNION ALL
+            SELECT
+                id,
+                chatid,
+                username,
+                firstname,
+                lastname,
+                score_name_policy,
+                score_custom_name,
+                value,
+                rank,
+                TRUE AS is_personal
+            FROM ranked
+            WHERE chatid = %s
+              AND rank > %s
+            ORDER BY rank
+            """.replace("__COUNTER_COLUMN__", counter_column)
+        cursor.execute(
+            query,
+            (limit, str(chat_id), limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
     def _row_to_user(row: dict[str, object]) -> TelegramUser:
         """Преобразовать строку результата в доменную модель пользователя.
 
@@ -992,6 +1145,53 @@ class PostgresRepository:
             user_id=int(str(row["id"])),
             user=cls._row_to_user(row),
         )
+
+    @classmethod
+    def _row_to_score_entry(
+        cls,
+        row: dict[str, object],
+        chat_id: int,
+        *,
+        personal: bool,
+    ) -> ScoreEntry:
+        display_name = (
+            "Вы"
+            if personal
+            else cls._format_score_display_name(
+                user_id=int(str(row["id"])),
+                policy=ScoreNamePolicy(str(row.get("score_name_policy") or "anonymous")),
+                custom_name=str(row.get("score_custom_name") or ""),
+                username=str(row["username"]) if row.get("username") is not None else None,
+                first_name=str(row.get("firstname") or ""),
+                last_name=str(row.get("lastname") or ""),
+            )
+        )
+        return ScoreEntry(
+            rank=int(str(row["rank"])),
+            value=int(str(row["value"])),
+            display_name=display_name,
+            is_current_user=str(row["chatid"]) == str(chat_id),
+        )
+
+    @staticmethod
+    def _format_score_display_name(
+        user_id: int,
+        policy: ScoreNamePolicy,
+        custom_name: str,
+        username: str | None,
+        first_name: str,
+        last_name: str,
+    ) -> str:
+        anonymous_name = f"Участник #{user_id}"
+        if policy == ScoreNamePolicy.CUSTOM and custom_name:
+            return custom_name
+        if policy == ScoreNamePolicy.TELEGRAM:
+            if username:
+                return f"@{username}"
+            full_name = " ".join(part for part in (first_name, last_name) if part).strip()
+            if full_name:
+                return full_name
+        return anonymous_name
 
     @staticmethod
     def _scalar(cursor: Any, query: str, params: tuple[object, ...] = ()) -> int:

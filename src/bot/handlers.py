@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,9 @@ from models import (
     BroadcastRecipient,
     DictionaryEntry,
     DictionarySource,
+    ScoreBoard,
+    ScoreEntry,
+    ScoreNamePolicy,
     SearchMode,
     TelegramUser,
     UserProfileStats,
@@ -46,6 +50,7 @@ from .flows import (
     AdminCommentsFlow,
     AdminEntriesFlow,
     CommentFlow,
+    ScoreAliasFlow,
     SuggestionFlow,
 )
 
@@ -94,6 +99,7 @@ class DictionaryBotHandlers:
         router.message.register(self._handle_help, Command("help"))
         router.message.register(self._handle_info, Command("info"))
         router.message.register(self._handle_me, Command("me"))
+        router.message.register(self._handle_score_command, Command("score"))
         router.message.register(self._handle_chat_id, Command("chatid"))
         router.message.register(self._handle_getdb, Command("getdb"))
         router.message.register(self._handle_admin_command, Command("admin"))
@@ -110,6 +116,7 @@ class DictionaryBotHandlers:
         router.message.register(self._handle_add_confirm, AddEntryFlow.confirm)
         router.message.register(self._handle_comment_text, CommentFlow.text)
         router.message.register(self._handle_suggestion_text, SuggestionFlow.text)
+        router.message.register(self._handle_score_alias_text, ScoreAliasFlow.name)
         router.message.register(self._handle_admin_broadcast_text, AdminBroadcastFlow.text)
         router.message.register(self._handle_admin_broadcast_days, AdminBroadcastFlow.days)
         router.message.register(self._handle_admin_entry_input, AdminEntriesFlow.filter_value)
@@ -122,6 +129,7 @@ class DictionaryBotHandlers:
             self._handle_suggestion_callback,
             F.data.startswith("suggest:"),
         )
+        router.callback_query.register(self._handle_score_callback, F.data.startswith("score:"))
         router.callback_query.register(self._handle_admin_callback, F.data.startswith("admin:"))
         router.message.register(self._handle_search, F.text & ~F.text.startswith("/"))
 
@@ -159,6 +167,12 @@ class DictionaryBotHandlers:
             await message.answer(texts.ME_EMPTY_TEXT)
             return
         await message.answer(self._build_user_profile_summary(profile))
+
+    async def _handle_score_command(self, message: Message) -> None:
+        await self._track_message(message, "/score")
+        actor = self._extract_actor(message)
+        await asyncio.to_thread(self._db_repository.ensure_user, actor)
+        await self._show_scoreboard(message.chat.id)
 
     async def _handle_chat_id(self, message: Message) -> None:
         await self._track_message(message, "/chatid")
@@ -375,6 +389,67 @@ class DictionaryBotHandlers:
 
         await state.clear()
         await message_obj.answer(texts.SUGGEST_CANCELLED_TEXT)
+
+    async def _handle_score_callback(self, callback: CallbackQuery, state: FSMContext) -> None:
+        """Обработать inline-действия команды `/score`.
+
+        Args:
+            callback: CallbackQuery от inline-кнопки.
+            state: FSM-контекст текущего пользователя.
+        """
+        await callback.answer()
+        message_obj = callback.message
+        if not isinstance(message_obj, Message):
+            return
+
+        actor = self._extract_actor_from_callback(callback)
+        data = callback.data or ""
+        await asyncio.to_thread(self._db_repository.ensure_user, actor)
+
+        if data == "score:refresh":
+            await self._show_scoreboard(actor.chat_id)
+            return
+        if data == "score:telegram":
+            await asyncio.to_thread(
+                self._db_repository.update_score_display_name,
+                actor.chat_id,
+                ScoreNamePolicy.TELEGRAM,
+                None,
+            )
+            await message_obj.answer(texts.SCORE_SHOW_TELEGRAM_SUCCESS_TEXT)
+            await self._show_scoreboard(actor.chat_id)
+            return
+        if data == "score:anonymous":
+            await asyncio.to_thread(
+                self._db_repository.update_score_display_name,
+                actor.chat_id,
+                ScoreNamePolicy.ANONYMOUS,
+                None,
+            )
+            await message_obj.answer(texts.SCORE_HIDE_SUCCESS_TEXT)
+            await self._show_scoreboard(actor.chat_id)
+            return
+        if data == "score:custom":
+            await state.set_state(ScoreAliasFlow.name)
+            await message_obj.answer(texts.SCORE_ALIAS_PROMPT_TEXT)
+
+    async def _handle_score_alias_text(self, message: Message, state: FSMContext) -> None:
+        alias = self._normalize_score_alias(message.text or "")
+        if alias is None:
+            await message.answer(texts.SCORE_ALIAS_ERROR_TEXT)
+            return
+
+        actor = self._extract_actor(message)
+        await asyncio.to_thread(self._db_repository.ensure_user, actor)
+        await asyncio.to_thread(
+            self._db_repository.update_score_display_name,
+            actor.chat_id,
+            ScoreNamePolicy.CUSTOM,
+            alias,
+        )
+        await state.clear()
+        await message.answer(texts.SCORE_ALIAS_SUCCESS_TEXT.format(alias=alias))
+        await self._show_scoreboard(actor.chat_id)
 
     async def _handle_admin_callback(self, callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
@@ -1197,6 +1272,14 @@ class DictionaryBotHandlers:
             reply_markup=self._admin_root_markup(),
         )
 
+    async def _show_scoreboard(self, chat_id: int) -> None:
+        scoreboard = await asyncio.to_thread(self._db_repository.fetch_scoreboard, chat_id)
+        await self._bot.send_message(
+            chat_id,
+            self._build_scoreboard_text(scoreboard),
+            reply_markup=self._scoreboard_markup(),
+        )
+
     async def _show_admin_entries_page(
         self,
         chat_id: int,
@@ -1427,6 +1510,35 @@ class DictionaryBotHandlers:
                     InlineKeyboardButton(text="Статистика", callback_data="admin:stats"),
                 ],
                 [InlineKeyboardButton(text="Предложения", callback_data="admin:suggestions")],
+            ]
+        )
+
+    @staticmethod
+    def _scoreboard_markup() -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=texts.SCORE_BUTTON_TELEGRAM_TEXT,
+                        callback_data="score:telegram",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=texts.SCORE_BUTTON_CUSTOM_TEXT,
+                        callback_data="score:custom",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=texts.SCORE_BUTTON_ANONYMOUS_TEXT,
+                        callback_data="score:anonymous",
+                    ),
+                    InlineKeyboardButton(
+                        text=texts.SCORE_BUTTON_REFRESH_TEXT,
+                        callback_data="score:refresh",
+                    ),
+                ],
             ]
         )
 
@@ -1783,6 +1895,47 @@ class DictionaryBotHandlers:
             f"💡 Предложений: {suggestions}"
         )
 
+    @classmethod
+    def _build_scoreboard_text(cls, scoreboard: ScoreBoard) -> str:
+        sections = [
+            cls._build_score_category(
+                "🔎 Поиски",
+                scoreboard.searches,
+                scoreboard.personal_searches,
+            ),
+            cls._build_score_category(
+                "📝 Статьи",
+                scoreboard.user_entries,
+                scoreboard.personal_user_entries,
+            ),
+            cls._build_score_category(
+                "💬 Комментарии",
+                scoreboard.comments,
+                scoreboard.personal_comments,
+            ),
+            cls._build_score_category(
+                "💡 Предложения",
+                scoreboard.suggestions,
+                scoreboard.personal_suggestions,
+            ),
+        ]
+        return texts.SCORE_INTRO_TEXT + "\n\n" + "\n\n".join(sections)
+
+    @staticmethod
+    def _build_score_category(
+        title: str,
+        entries: tuple[ScoreEntry, ...],
+        personal_entry: ScoreEntry | None,
+    ) -> str:
+        lines = [title]
+        if not entries:
+            lines.append(texts.SCORE_EMPTY_CATEGORY_TEXT)
+        else:
+            lines.extend(f"{entry.rank}. {entry.display_name} — {entry.value}" for entry in entries)
+        if personal_entry is not None:
+            lines.append(f"… {personal_entry.rank}. Вы — {personal_entry.value}")
+        return "\n".join(lines)
+
     @staticmethod
     def _query_stats_total(value: Any) -> int:
         if isinstance(value, int):
@@ -1808,6 +1961,22 @@ class DictionaryBotHandlers:
             else:
                 parts.append(str(item))
         return ", ".join(parts)
+
+    @staticmethod
+    def _normalize_score_alias(raw_alias: str) -> str | None:
+        if "\n" in raw_alias or "\r" in raw_alias:
+            return None
+        alias = " ".join(raw_alias.split())
+        lowered_alias = alias.lower()
+        if not 2 <= len(alias) <= 24:
+            return None
+        if any(forbidden in lowered_alias for forbidden in ("http", "https", "t.me")):
+            return None
+        if "/" in alias or "@" in alias:
+            return None
+        if re.fullmatch(r"[0-9A-Za-zА-Яа-яЁё _.-]+", alias) is None:
+            return None
+        return alias
 
     @staticmethod
     def _build_admin_filters_line(primary: object, secondary: object) -> str:

@@ -76,6 +76,7 @@ class DictionaryBotApp:
             BotCommand(command="info", description="Как пользоваться ботом"),
             BotCommand(command="mode", description="Настроить поиск"),
             BotCommand(command="me", description="Мой профиль"),
+            BotCommand(command="score", description="Таблица лучших"),
             BotCommand(command="add", description="Предложить новый перевод"),
             BotCommand(command="comment", description="Комментарий к статье"),
             BotCommand(command="suggest", description="Идея или замечание"),

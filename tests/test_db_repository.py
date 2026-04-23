@@ -8,7 +8,13 @@ from contextlib import contextmanager
 from pydantic import SecretStr
 
 from config import DatabaseConfig
-from models import BroadcastAudience, BroadcastDeliveryStatus, BroadcastRecipient, TelegramUser
+from models import (
+    BroadcastAudience,
+    BroadcastDeliveryStatus,
+    BroadcastRecipient,
+    ScoreNamePolicy,
+    TelegramUser,
+)
 from repositories.db_repository import PostgresRepository
 
 
@@ -146,9 +152,7 @@ def test_log_action_increments_search_counter_for_search_queries() -> None:
     repository.log_action("привет", 123456, action_type="search")
 
     assert connection.commits == 1
-    assert any(
-        "SET searches_count = searches_count + %s" in query for query, _ in cursor.executed
-    )
+    assert any("SET searches_count = searches_count + %s" in query for query, _ in cursor.executed)
 
 
 def test_log_action_does_not_increment_search_counter_for_commands() -> None:
@@ -178,6 +182,117 @@ def test_insert_suggestion_increments_suggestion_counter() -> None:
     assert connection.commits == 1
     assert any(
         "SET suggestions_count = suggestions_count + 1" in query for query, _ in cursor.executed
+    )
+
+
+def test_fetch_scoreboard_returns_top_rows_and_personal_rank() -> None:
+    """Рейтинг должен возвращать топ и личное место пользователя вне топа."""
+    cursor = FakeCursor(
+        responses=[],
+        many_responses=[
+            [
+                {
+                    "id": 2,
+                    "chatid": "222",
+                    "username": "shown",
+                    "firstname": "Shown",
+                    "lastname": "",
+                    "score_name_policy": "telegram",
+                    "score_custom_name": None,
+                    "value": 10,
+                    "rank": 1,
+                    "is_personal": False,
+                },
+                {
+                    "id": 1,
+                    "chatid": "111",
+                    "username": "hidden",
+                    "firstname": "Hidden",
+                    "lastname": "",
+                    "score_name_policy": "anonymous",
+                    "score_custom_name": None,
+                    "value": 3,
+                    "rank": 15,
+                    "is_personal": True,
+                },
+            ],
+            [],
+            [],
+            [],
+        ],
+    )
+    connection = FakeConnection(cursor)
+    repository = FakePostgresRepository(connection)
+
+    scoreboard = repository.fetch_scoreboard(chat_id=111, limit=10)
+
+    assert scoreboard.searches[0].display_name == "@shown"
+    assert scoreboard.searches[0].rank == 1
+    assert scoreboard.searches[0].value == 10
+    assert scoreboard.personal_searches is not None
+    assert scoreboard.personal_searches.display_name == "Вы"
+    assert scoreboard.personal_searches.rank == 15
+    assert all("WHERE searches_count > 0" in query for query, _ in cursor.executed[:1])
+
+
+def test_update_score_display_name_saves_policy_and_custom_name() -> None:
+    """Настройка имени рейтинга должна сохранять политику и псевдоним."""
+    cursor = FakeCursor(responses=[])
+    connection = FakeConnection(cursor)
+    repository = FakePostgresRepository(connection)
+
+    repository.update_score_display_name(123456, ScoreNamePolicy.CUSTOM, "Салам")
+
+    assert connection.commits == 1
+    assert any("SET score_name_policy = %s" in query for query, _ in cursor.executed)
+    assert cursor.executed[-1][1] == (ScoreNamePolicy.CUSTOM.value, "Салам", "123456")
+
+
+def test_format_score_display_name_respects_privacy_policy() -> None:
+    """Отображаемое имя рейтинга должно учитывать выбранную пользователем политику."""
+    assert (
+        PostgresRepository._format_score_display_name(
+            user_id=7,
+            policy=ScoreNamePolicy.ANONYMOUS,
+            custom_name="",
+            username="tester",
+            first_name="Иван",
+            last_name="Петров",
+        )
+        == "Участник #7"
+    )
+    assert (
+        PostgresRepository._format_score_display_name(
+            user_id=7,
+            policy=ScoreNamePolicy.TELEGRAM,
+            custom_name="",
+            username="tester",
+            first_name="Иван",
+            last_name="Петров",
+        )
+        == "@tester"
+    )
+    assert (
+        PostgresRepository._format_score_display_name(
+            user_id=7,
+            policy=ScoreNamePolicy.TELEGRAM,
+            custom_name="",
+            username=None,
+            first_name="Иван",
+            last_name="Петров",
+        )
+        == "Иван Петров"
+    )
+    assert (
+        PostgresRepository._format_score_display_name(
+            user_id=7,
+            policy=ScoreNamePolicy.CUSTOM,
+            custom_name="Кубачи",
+            username="tester",
+            first_name="Иван",
+            last_name="Петров",
+        )
+        == "Кубачи"
     )
 
 
@@ -212,12 +327,14 @@ def test_create_broadcast_saves_snapshot_of_recipients() -> None:
     assert broadcast_id == 77
     assert connection.commits == 1
     assert any("INSERT INTO broadcasts" in query for query, _ in cursor.executed)
-    assert sum(
-        1 for query, _ in cursor.executed if "INSERT INTO broadcast_source_messages" in query
-    ) == 2
-    assert sum(
-        1 for query, params in cursor.executed if "INSERT INTO broadcast_deliveries" in query
-    ) == 2
+    assert (
+        sum(1 for query, _ in cursor.executed if "INSERT INTO broadcast_source_messages" in query)
+        == 2
+    )
+    assert (
+        sum(1 for query, params in cursor.executed if "INSERT INTO broadcast_deliveries" in query)
+        == 2
+    )
     assert all(
         params[-1] == BroadcastDeliveryStatus.PENDING.value
         for query, params in cursor.executed

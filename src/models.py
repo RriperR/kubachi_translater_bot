@@ -28,6 +28,14 @@ class SearchMode(str, Enum):
         return cls.LITE
 
 
+class ScoreNamePolicy(str, Enum):
+    """Политика отображения пользователя в таблице лучших."""
+
+    ANONYMOUS = "anonymous"
+    TELEGRAM = "telegram"
+    CUSTOM = "custom"
+
+
 class DictionarySource(str, Enum):
     """Источник словарной статьи."""
 
@@ -261,6 +269,30 @@ class AdminStats:
     user_entries_count: int = 0
     comments_count: int = 0
     suggestions_count: int = 0
+
+
+@dataclass(frozen=True)
+class ScoreEntry:
+    """Строка таблицы лучших."""
+
+    rank: int
+    value: int
+    display_name: str
+    is_current_user: bool = False
+
+
+@dataclass(frozen=True)
+class ScoreBoard:
+    """Набор таблиц лучших по основным пользовательским действиям."""
+
+    searches: tuple[ScoreEntry, ...]
+    user_entries: tuple[ScoreEntry, ...]
+    comments: tuple[ScoreEntry, ...]
+    suggestions: tuple[ScoreEntry, ...]
+    personal_searches: ScoreEntry | None = None
+    personal_user_entries: ScoreEntry | None = None
+    personal_comments: ScoreEntry | None = None
+    personal_suggestions: ScoreEntry | None = None
 
 
 @dataclass(frozen=True)

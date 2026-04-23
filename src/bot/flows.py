@@ -27,6 +27,12 @@ class SuggestionFlow(StatesGroup):
     text = State()
 
 
+class ScoreAliasFlow(StatesGroup):
+    """Состояние диалога для настройки имени в таблице лучших."""
+
+    name = State()
+
+
 class AdminBroadcastFlow(StatesGroup):
     """Состояния админской рассылки."""
 

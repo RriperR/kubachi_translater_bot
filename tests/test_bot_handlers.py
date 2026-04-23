@@ -6,7 +6,7 @@ from datetime import datetime
 
 from bot.application import DictionaryBotApp
 from bot.handlers import DictionaryBotHandlers
-from models import SearchMode, TelegramUser, UserProfileStats
+from models import ScoreBoard, ScoreEntry, SearchMode, TelegramUser, UserProfileStats
 
 
 def test_build_suggestion_notification_contains_actor_and_text() -> None:
@@ -73,6 +73,7 @@ def test_build_default_commands_contains_main_user_actions() -> None:
         "info",
         "mode",
         "me",
+        "score",
         "add",
         "comment",
         "suggest",
@@ -83,6 +84,7 @@ def test_build_default_commands_contains_main_user_actions() -> None:
         "Как пользоваться ботом",
         "Настроить поиск",
         "Мой профиль",
+        "Таблица лучших",
         "Предложить новый перевод",
         "Комментарий к статье",
         "Идея или замечание",
@@ -135,3 +137,53 @@ def test_build_action_error_context_falls_back_without_username() -> None:
     assert "username=-" in context
     assert 'name="Салам"' in context
     assert 'action="/mode"' in context
+
+
+def test_build_scoreboard_text_contains_personal_rank_outside_top() -> None:
+    """Таблица лучших должна показывать личное место пользователя вне топа."""
+    scoreboard = ScoreBoard(
+        searches=(
+            ScoreEntry(rank=1, value=20, display_name="Участник #10"),
+            ScoreEntry(rank=2, value=12, display_name="@tester"),
+        ),
+        user_entries=(),
+        comments=(),
+        suggestions=(),
+        personal_searches=ScoreEntry(
+            rank=15,
+            value=3,
+            display_name="Вы",
+            is_current_user=True,
+        ),
+    )
+
+    text = DictionaryBotHandlers._build_scoreboard_text(scoreboard)
+
+    assert "🏆 Таблица лучших" in text
+    assert "🔎 Поиски" in text
+    assert "1. Участник #10 — 20" in text
+    assert "2. @tester — 12" in text
+    assert "… 15. Вы — 3" in text
+    assert "📝 Статьи\nПока нет данных" in text
+
+
+def test_normalize_score_alias_accepts_valid_names() -> None:
+    """Псевдоним для рейтинга должен нормализоваться и принимать безопасные символы."""
+    assert DictionaryBotHandlers._normalize_score_alias("  Салам   Уста-1  ") == "Салам Уста-1"
+    assert DictionaryBotHandlers._normalize_score_alias("Kubachi.master_2") == "Kubachi.master_2"
+
+
+def test_normalize_score_alias_rejects_links_mentions_commands_and_long_names() -> None:
+    """Псевдоним для рейтинга должен отклонять ссылки, команды и слишком длинный текст."""
+    invalid_values = (
+        "a",
+        "a" * 25,
+        "@username",
+        "/start",
+        "https://example.com",
+        "t.me/channel",
+        "Имя\nФамилия",
+    )
+
+    for value in invalid_values:
+        assert DictionaryBotHandlers._normalize_score_alias(value) is None
