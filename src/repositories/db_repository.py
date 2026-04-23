@@ -24,6 +24,7 @@ from models import (
     ScoreBoard,
     ScoreEntry,
     ScoreNamePolicy,
+    ScorePeriod,
     SearchMode,
     TelegramUser,
     UserProfileStats,
@@ -878,11 +879,17 @@ class PostgresRepository:
             suggestions_count=int(user_row.get("suggestions_count") or 0),
         )
 
-    def fetch_scoreboard(self, chat_id: int, limit: int = 10) -> ScoreBoard:
+    def fetch_scoreboard(
+        self,
+        chat_id: int,
+        period: ScorePeriod = ScorePeriod.ALL_TIME,
+        limit: int = 10,
+    ) -> ScoreBoard:
         """Собрать таблицы лучших по пользовательским счётчикам.
 
         Args:
             chat_id: Идентификатор Telegram-чата текущего пользователя.
+            period: Период расчёта рейтинга.
             limit: Число строк в каждом рейтинге.
 
         Returns:
@@ -898,10 +905,42 @@ class PostgresRepository:
             self._connect() as connection,
             connection.cursor(cursor_factory=RealDictCursor) as cursor,
         ):
-            category_rows = {
-                category: self._fetch_score_rows(cursor, counter_column, chat_id, limit)
-                for category, counter_column in categories.items()
-            }
+            if period == ScorePeriod.ALL_TIME:
+                category_rows = {
+                    category: self._fetch_score_rows(cursor, counter_column, chat_id, limit)
+                    for category, counter_column in categories.items()
+                }
+            else:
+                category_rows = {
+                    "searches": self._fetch_period_score_rows(
+                        cursor,
+                        "searches",
+                        chat_id,
+                        limit,
+                        period,
+                    ),
+                    "user_entries": self._fetch_period_score_rows(
+                        cursor,
+                        "user_entries",
+                        chat_id,
+                        limit,
+                        period,
+                    ),
+                    "comments": self._fetch_period_score_rows(
+                        cursor,
+                        "comments",
+                        chat_id,
+                        limit,
+                        period,
+                    ),
+                    "suggestions": self._fetch_period_score_rows(
+                        cursor,
+                        "suggestions",
+                        chat_id,
+                        limit,
+                        period,
+                    ),
+                }
 
         parsed = {
             category: tuple(
@@ -927,6 +966,7 @@ class PostgresRepository:
             user_entries=parsed["user_entries"],
             comments=parsed["comments"],
             suggestions=parsed["suggestions"],
+            period=period,
             personal_searches=personal["searches"],
             personal_user_entries=personal["user_entries"],
             personal_comments=personal["comments"],
@@ -1113,6 +1153,115 @@ class PostgresRepository:
             (limit, str(chat_id), limit),
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    @classmethod
+    def _fetch_period_score_rows(
+        cls,
+        cursor: Any,
+        category: str,
+        chat_id: int,
+        limit: int,
+        period: ScorePeriod,
+    ) -> list[dict[str, object]]:
+        source_query = cls._period_score_source_query(category)
+        days = cls._score_period_days(period)
+        query = """
+            WITH score_events AS (
+                __SOURCE_QUERY__
+            ),
+            scores AS (
+                SELECT user_id, COUNT(*)::INTEGER AS value
+                FROM score_events
+                WHERE user_id IS NOT NULL
+                GROUP BY user_id
+            ),
+            ranked AS (
+                SELECT
+                    users.id,
+                    users.chatid,
+                    users.username,
+                    users.firstname,
+                    users.lastname,
+                    users.score_name_policy,
+                    users.score_custom_name,
+                    scores.value,
+                    ROW_NUMBER() OVER (ORDER BY scores.value DESC, users.id ASC) AS rank
+                FROM scores
+                JOIN users ON users.id = scores.user_id
+                WHERE scores.value > 0
+            )
+            SELECT
+                id,
+                chatid,
+                username,
+                firstname,
+                lastname,
+                score_name_policy,
+                score_custom_name,
+                value,
+                rank,
+                FALSE AS is_personal
+            FROM ranked
+            WHERE rank <= %s
+            UNION ALL
+            SELECT
+                id,
+                chatid,
+                username,
+                firstname,
+                lastname,
+                score_name_policy,
+                score_custom_name,
+                value,
+                rank,
+                TRUE AS is_personal
+            FROM ranked
+            WHERE chatid = %s
+              AND rank > %s
+            ORDER BY rank
+            """.replace("__SOURCE_QUERY__", source_query)
+        cursor.execute(query, (days, limit, str(chat_id), limit))
+        return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def _period_score_source_query(category: str) -> str:
+        sources = {
+            "searches": """
+                SELECT fk_user AS user_id
+                FROM actions
+                WHERE action_type IN ('search', 'not_found')
+                  AND created_at >= NOW() - (%s || ' days')::interval
+            """,
+            "user_entries": """
+                SELECT user_id
+                FROM dictionary_entries
+                WHERE source = 'user'
+                  AND user_id IS NOT NULL
+                  AND created_at >= NOW() - (%s || ' days')::interval
+            """,
+            "comments": """
+                SELECT user_id
+                FROM dictionary_entry_comments
+                WHERE user_id IS NOT NULL
+                  AND created_at >= NOW() - (%s || ' days')::interval
+            """,
+            "suggestions": """
+                SELECT fk_user AS user_id
+                FROM suggestions
+                WHERE created_at >= NOW() - (%s || ' days')::interval
+            """,
+        }
+        if category not in sources:
+            raise ValueError("Недопустимая категория рейтинга")
+        return sources[category]
+
+    @staticmethod
+    def _score_period_days(period: ScorePeriod) -> int:
+        if period == ScorePeriod.WEEK:
+            return 7
+        if period == ScorePeriod.MONTH:
+            return 30
+        raise ValueError("Для рейтинга за всё время период в днях не используется")
 
     @staticmethod
     def _row_to_user(row: dict[str, object]) -> TelegramUser:

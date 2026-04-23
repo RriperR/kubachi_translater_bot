@@ -34,6 +34,7 @@ from models import (
     ScoreBoard,
     ScoreEntry,
     ScoreNamePolicy,
+    ScorePeriod,
     SearchMode,
     TelegramUser,
     UserProfileStats,
@@ -406,10 +407,12 @@ class DictionaryBotHandlers:
         data = callback.data or ""
         await asyncio.to_thread(self._db_repository.ensure_user, actor)
 
-        if data == "score:refresh":
-            await self._show_scoreboard(actor.chat_id)
+        period = self._score_period_from_callback(data)
+
+        if data.startswith("score:period:") or data.startswith("score:refresh"):
+            await self._show_scoreboard(actor.chat_id, period)
             return
-        if data == "score:telegram":
+        if data.startswith("score:telegram"):
             await asyncio.to_thread(
                 self._db_repository.update_score_display_name,
                 actor.chat_id,
@@ -417,9 +420,9 @@ class DictionaryBotHandlers:
                 None,
             )
             await message_obj.answer(texts.SCORE_SHOW_TELEGRAM_SUCCESS_TEXT)
-            await self._show_scoreboard(actor.chat_id)
+            await self._show_scoreboard(actor.chat_id, period)
             return
-        if data == "score:anonymous":
+        if data.startswith("score:anonymous"):
             await asyncio.to_thread(
                 self._db_repository.update_score_display_name,
                 actor.chat_id,
@@ -427,10 +430,11 @@ class DictionaryBotHandlers:
                 None,
             )
             await message_obj.answer(texts.SCORE_HIDE_SUCCESS_TEXT)
-            await self._show_scoreboard(actor.chat_id)
+            await self._show_scoreboard(actor.chat_id, period)
             return
-        if data == "score:custom":
+        if data.startswith("score:custom"):
             await state.set_state(ScoreAliasFlow.name)
+            await state.update_data(score_period=period.value)
             await message_obj.answer(texts.SCORE_ALIAS_PROMPT_TEXT)
 
     async def _handle_score_alias_text(self, message: Message, state: FSMContext) -> None:
@@ -447,9 +451,11 @@ class DictionaryBotHandlers:
             ScoreNamePolicy.CUSTOM,
             alias,
         )
+        data = await state.get_data()
+        period = ScorePeriod(str(data.get("score_period") or ScorePeriod.ALL_TIME.value))
         await state.clear()
         await message.answer(texts.SCORE_ALIAS_SUCCESS_TEXT.format(alias=alias))
-        await self._show_scoreboard(actor.chat_id)
+        await self._show_scoreboard(actor.chat_id, period)
 
     async def _handle_admin_callback(self, callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
@@ -1272,12 +1278,20 @@ class DictionaryBotHandlers:
             reply_markup=self._admin_root_markup(),
         )
 
-    async def _show_scoreboard(self, chat_id: int) -> None:
-        scoreboard = await asyncio.to_thread(self._db_repository.fetch_scoreboard, chat_id)
+    async def _show_scoreboard(
+        self,
+        chat_id: int,
+        period: ScorePeriod = ScorePeriod.ALL_TIME,
+    ) -> None:
+        scoreboard = await asyncio.to_thread(
+            self._db_repository.fetch_scoreboard,
+            chat_id,
+            period,
+        )
         await self._bot.send_message(
             chat_id,
             self._build_scoreboard_text(scoreboard),
-            reply_markup=self._scoreboard_markup(),
+            reply_markup=self._scoreboard_markup(period),
         )
 
     async def _show_admin_entries_page(
@@ -1514,29 +1528,52 @@ class DictionaryBotHandlers:
         )
 
     @staticmethod
-    def _scoreboard_markup() -> InlineKeyboardMarkup:
+    def _scoreboard_markup(period: ScorePeriod) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
+                        text=DictionaryBotHandlers._score_period_button_text(
+                            ScorePeriod.ALL_TIME,
+                            period,
+                        ),
+                        callback_data="score:period:all",
+                    ),
+                    InlineKeyboardButton(
+                        text=DictionaryBotHandlers._score_period_button_text(
+                            ScorePeriod.MONTH,
+                            period,
+                        ),
+                        callback_data="score:period:month",
+                    ),
+                    InlineKeyboardButton(
+                        text=DictionaryBotHandlers._score_period_button_text(
+                            ScorePeriod.WEEK,
+                            period,
+                        ),
+                        callback_data="score:period:week",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
                         text=texts.SCORE_BUTTON_TELEGRAM_TEXT,
-                        callback_data="score:telegram",
+                        callback_data=f"score:telegram:{period.value}",
                     )
                 ],
                 [
                     InlineKeyboardButton(
                         text=texts.SCORE_BUTTON_CUSTOM_TEXT,
-                        callback_data="score:custom",
+                        callback_data=f"score:custom:{period.value}",
                     )
                 ],
                 [
                     InlineKeyboardButton(
                         text=texts.SCORE_BUTTON_ANONYMOUS_TEXT,
-                        callback_data="score:anonymous",
+                        callback_data=f"score:anonymous:{period.value}",
                     ),
                     InlineKeyboardButton(
                         text=texts.SCORE_BUTTON_REFRESH_TEXT,
-                        callback_data="score:refresh",
+                        callback_data=f"score:refresh:{period.value}",
                     ),
                 ],
             ]
@@ -1919,7 +1956,8 @@ class DictionaryBotHandlers:
                 scoreboard.personal_searches,
             ),
         ]
-        return texts.SCORE_INTRO_TEXT + "\n\n" + "\n\n".join(sections)
+        period_line = f"Период: {cls._score_period_label(scoreboard.period)}"
+        return texts.SCORE_INTRO_TEXT + "\n\n" + period_line + "\n\n" + "\n\n".join(sections)
 
     @staticmethod
     def _build_score_category(
@@ -1977,6 +2015,34 @@ class DictionaryBotHandlers:
         if re.fullmatch(r"[0-9A-Za-zА-Яа-яЁё _.-]+", alias) is None:
             return None
         return alias
+
+    @staticmethod
+    def _score_period_from_callback(callback_data: str) -> ScorePeriod:
+        raw_period = callback_data.rsplit(":", 1)[-1]
+        try:
+            return ScorePeriod(raw_period)
+        except ValueError:
+            return ScorePeriod.ALL_TIME
+
+    @staticmethod
+    def _score_period_label(period: ScorePeriod) -> str:
+        labels = {
+            ScorePeriod.ALL_TIME: texts.SCORE_PERIOD_ALL_TEXT,
+            ScorePeriod.MONTH: texts.SCORE_PERIOD_MONTH_TEXT,
+            ScorePeriod.WEEK: texts.SCORE_PERIOD_WEEK_TEXT,
+        }
+        return labels[period]
+
+    @classmethod
+    def _score_period_button_text(
+        cls,
+        period: ScorePeriod,
+        current_period: ScorePeriod,
+    ) -> str:
+        label = cls._score_period_label(period)
+        if period == current_period:
+            return f"✓ {label}"
+        return label
 
     @staticmethod
     def _build_admin_filters_line(primary: object, secondary: object) -> str:

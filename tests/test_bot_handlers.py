@@ -6,7 +6,7 @@ from datetime import datetime
 
 from bot.application import DictionaryBotApp
 from bot.handlers import DictionaryBotHandlers
-from models import ScoreBoard, ScoreEntry, SearchMode, TelegramUser, UserProfileStats
+from models import ScoreBoard, ScoreEntry, ScorePeriod, SearchMode, TelegramUser, UserProfileStats
 
 
 def test_build_suggestion_notification_contains_actor_and_text() -> None:
@@ -149,6 +149,7 @@ def test_build_scoreboard_text_contains_personal_rank_outside_top() -> None:
         user_entries=(),
         comments=(),
         suggestions=(),
+        period=ScorePeriod.WEEK,
         personal_searches=ScoreEntry(
             rank=15,
             value=3,
@@ -160,6 +161,7 @@ def test_build_scoreboard_text_contains_personal_rank_outside_top() -> None:
     text = DictionaryBotHandlers._build_scoreboard_text(scoreboard)
 
     assert "🏆 Таблица лучших" in text
+    assert "Период: Неделя" in text
     assert "🔎 Поиски" in text
     assert "1. Участник #10 — 20" in text
     assert "2. @tester — 12" in text
@@ -168,6 +170,24 @@ def test_build_scoreboard_text_contains_personal_rank_outside_top() -> None:
     assert text.index("📝 Статьи") < text.index("💬 Комментарии")
     assert text.index("💬 Комментарии") < text.index("💡 Предложения")
     assert text.index("💡 Предложения") < text.index("🔎 Поиски")
+
+
+def test_score_period_button_text_marks_current_period() -> None:
+    """Кнопка активного периода должна быть визуально выделена."""
+    assert (
+        DictionaryBotHandlers._score_period_button_text(
+            ScorePeriod.MONTH,
+            ScorePeriod.MONTH,
+        )
+        == "✓ Месяц"
+    )
+    assert (
+        DictionaryBotHandlers._score_period_button_text(
+            ScorePeriod.WEEK,
+            ScorePeriod.MONTH,
+        )
+        == "Неделя"
+    )
 
 
 def test_normalize_score_alias_accepts_valid_names() -> None:

@@ -36,6 +36,14 @@ class ScoreNamePolicy(str, Enum):
     CUSTOM = "custom"
 
 
+class ScorePeriod(str, Enum):
+    """Период расчёта таблицы лучших."""
+
+    ALL_TIME = "all"
+    MONTH = "month"
+    WEEK = "week"
+
+
 class DictionarySource(str, Enum):
     """Источник словарной статьи."""
 
@@ -289,6 +297,7 @@ class ScoreBoard:
     user_entries: tuple[ScoreEntry, ...]
     comments: tuple[ScoreEntry, ...]
     suggestions: tuple[ScoreEntry, ...]
+    period: ScorePeriod = ScorePeriod.ALL_TIME
     personal_searches: ScoreEntry | None = None
     personal_user_entries: ScoreEntry | None = None
     personal_comments: ScoreEntry | None = None

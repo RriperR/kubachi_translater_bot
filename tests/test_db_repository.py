@@ -13,6 +13,7 @@ from models import (
     BroadcastDeliveryStatus,
     BroadcastRecipient,
     ScoreNamePolicy,
+    ScorePeriod,
     TelegramUser,
 )
 from repositories.db_repository import PostgresRepository
@@ -233,6 +234,46 @@ def test_fetch_scoreboard_returns_top_rows_and_personal_rank() -> None:
     assert scoreboard.personal_searches.display_name == "Вы"
     assert scoreboard.personal_searches.rank == 15
     assert all("WHERE searches_count > 0" in query for query, _ in cursor.executed[:1])
+
+
+def test_fetch_scoreboard_for_month_uses_period_sources() -> None:
+    """Месячный рейтинг должен считаться по событиям за период, а не по общим счётчикам."""
+    cursor = FakeCursor(
+        responses=[],
+        many_responses=[
+            [
+                {
+                    "id": 3,
+                    "chatid": "333",
+                    "username": None,
+                    "firstname": "Автор",
+                    "lastname": "",
+                    "score_name_policy": "anonymous",
+                    "score_custom_name": None,
+                    "value": 4,
+                    "rank": 1,
+                    "is_personal": False,
+                }
+            ],
+            [],
+            [],
+            [],
+        ],
+    )
+    connection = FakeConnection(cursor)
+    repository = FakePostgresRepository(connection)
+
+    scoreboard = repository.fetch_scoreboard(
+        chat_id=111,
+        period=ScorePeriod.MONTH,
+        limit=10,
+    )
+
+    assert scoreboard.period == ScorePeriod.MONTH
+    assert scoreboard.searches[0].display_name == "Участник #3"
+    assert "FROM actions" in cursor.executed[0][0]
+    assert "created_at >= NOW() -" in cursor.executed[0][0]
+    assert cursor.executed[0][1] == (30, 10, "111", 10)
 
 
 def test_update_score_display_name_saves_policy_and_custom_name() -> None:

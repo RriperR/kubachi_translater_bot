@@ -93,6 +93,9 @@ SCORE_BUTTON_TELEGRAM_TEXT = "Показывать мой Telegram-ник"
 SCORE_BUTTON_CUSTOM_TEXT = "Задать имя для рейтинга"
 SCORE_BUTTON_ANONYMOUS_TEXT = "Скрыть меня"
 SCORE_BUTTON_REFRESH_TEXT = "Обновить"
+SCORE_PERIOD_ALL_TEXT = "Всё время"
+SCORE_PERIOD_MONTH_TEXT = "Месяц"
+SCORE_PERIOD_WEEK_TEXT = "Неделя"
 
 INFO_TEXT = """Этот бот помогает искать переводы слов и выражений
 между кубачинским и русским языками.
