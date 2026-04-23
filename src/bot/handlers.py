@@ -1899,11 +1899,6 @@ class DictionaryBotHandlers:
     def _build_scoreboard_text(cls, scoreboard: ScoreBoard) -> str:
         sections = [
             cls._build_score_category(
-                "🔎 Поиски",
-                scoreboard.searches,
-                scoreboard.personal_searches,
-            ),
-            cls._build_score_category(
                 "📝 Статьи",
                 scoreboard.user_entries,
                 scoreboard.personal_user_entries,
@@ -1917,6 +1912,11 @@ class DictionaryBotHandlers:
                 "💡 Предложения",
                 scoreboard.suggestions,
                 scoreboard.personal_suggestions,
+            ),
+            cls._build_score_category(
+                "🔎 Поиски",
+                scoreboard.searches,
+                scoreboard.personal_searches,
             ),
         ]
         return texts.SCORE_INTRO_TEXT + "\n\n" + "\n\n".join(sections)

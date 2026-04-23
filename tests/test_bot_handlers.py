@@ -165,6 +165,9 @@ def test_build_scoreboard_text_contains_personal_rank_outside_top() -> None:
     assert "2. @tester — 12" in text
     assert "… 15. Вы — 3" in text
     assert "📝 Статьи\nПока нет данных" in text
+    assert text.index("📝 Статьи") < text.index("💬 Комментарии")
+    assert text.index("💬 Комментарии") < text.index("💡 Предложения")
+    assert text.index("💡 Предложения") < text.index("🔎 Поиски")
 
 
 def test_normalize_score_alias_accepts_valid_names() -> None:
