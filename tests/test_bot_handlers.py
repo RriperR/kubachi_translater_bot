@@ -7,6 +7,7 @@ from datetime import datetime
 from bot.application import DictionaryBotApp
 from bot.handlers import DictionaryBotHandlers
 from models import ScoreBoard, ScoreEntry, ScorePeriod, SearchMode, TelegramUser, UserProfileStats
+from services.search import SearchResult
 
 
 def test_build_suggestion_notification_contains_actor_and_text() -> None:
@@ -120,6 +121,38 @@ def test_build_search_error_context_contains_actor_and_query() -> None:
     assert "username=@tester" in context
     assert 'name="Иван Петров"' in context
     assert 'query="мастер по серебру"' in context
+
+
+def test_build_search_fallback_notification_contains_rag_failure_context() -> None:
+    actor = TelegramUser(
+        chat_id=123456,
+        username="tester",
+        first_name="Ivan",
+        last_name="Petrov",
+    )
+    search_result = SearchResult(
+        entries=[],
+        requested_mode=SearchMode.COMPLEX,
+        effective_mode=SearchMode.LITE,
+        fallback_provider="PgvectorSearchProvider",
+        fallback_reason=(
+            "Не удалось подключиться к embedding service: "
+            "[Errno 111] Connection refused"
+        ),
+    )
+
+    notification = DictionaryBotHandlers._build_search_fallback_notification(
+        actor,
+        "  хьул  ",
+        search_result,
+    )
+
+    assert "RAG fallback: complex -> lite" in notification
+    assert "chat_id=123456" in notification
+    assert "username=@tester" in notification
+    assert 'Query: "хьул"' in notification
+    assert "Provider: PgvectorSearchProvider" in notification
+    assert "Connection refused" in notification
 
 
 def test_build_action_error_context_falls_back_without_username() -> None:

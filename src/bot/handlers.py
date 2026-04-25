@@ -41,7 +41,7 @@ from models import (
     UserSubmittedEntry,
 )
 from normalization import normalize_kubachi_word
-from services.search import format_entry
+from services.search import SearchResult, format_entry
 from services.session_store import SessionStore
 
 from .bootstrap import DictionaryRuntime
@@ -885,7 +885,16 @@ class DictionaryBotHandlers:
             await self._notify_admin(
                 f'Пользователь {self._format_actor(message)} ищет "{query}" (режим: {mode.value})'
             )
-            entries = await asyncio.to_thread(self._search_service.search, query, mode)
+            search_result = await asyncio.to_thread(
+                self._search_service.search_with_diagnostics,
+                query,
+                mode,
+            )
+            entries = search_result.entries
+            if search_result.fallback_used:
+                await self._notify_admin(
+                    self._build_search_fallback_notification(actor, query, search_result)
+                )
             await asyncio.to_thread(
                 self._db_repository.log_search_query,
                 query,
@@ -1506,6 +1515,24 @@ class DictionaryBotHandlers:
     def _build_search_error_context(cls, actor: TelegramUser, query: str) -> str:
         safe_query = " ".join(query.split())
         return f'{cls._format_actor_debug(actor)}, query="{safe_query}"'
+
+    @classmethod
+    def _build_search_fallback_notification(
+        cls,
+        actor: TelegramUser,
+        query: str,
+        search_result: SearchResult,
+    ) -> str:
+        safe_query = " ".join(query.split())
+        provider = search_result.fallback_provider or "unknown"
+        reason = cls._truncate_text(search_result.fallback_reason or "-", 350)
+        return (
+            "RAG fallback: complex -> lite\n"
+            f'User: {cls._format_actor_debug(actor)}\n'
+            f'Query: "{safe_query}"\n'
+            f"Provider: {provider}\n"
+            f"Reason: {reason}"
+        )
 
     @classmethod
     def _build_action_error_context(cls, actor: TelegramUser, action: str) -> str:

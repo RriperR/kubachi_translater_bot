@@ -99,6 +99,17 @@ class StaticSearchProvider:
         return self._matches
 
 
+class FailingSemanticSearchProvider:
+    """Search provider that simulates unavailable semantic retrieval."""
+
+    fallback_to_lite_on_error = True
+
+    def search(self, query: str, mode: SearchMode) -> list[SearchMatch]:
+        if mode == SearchMode.COMPLEX:
+            raise RuntimeError("embedding service is unavailable")
+        return []
+
+
 def test_lite_search_ignores_examples_and_notes() -> None:
     """Простой режим не должен искать по примерам и примечаниям."""
     provider = LexicalSearchProvider(
@@ -183,6 +194,39 @@ def test_lite_search_prefers_word_match_over_translation() -> None:
     results = service.search("гьул", SearchMode.LITE)
 
     assert [entry.title for entry in results] == ["гьул - яблоко", "сад - гьул"]
+
+
+def test_complex_search_falls_back_to_lite_when_semantic_provider_fails() -> None:
+    """Complex search should degrade to lite if semantic retrieval is unavailable."""
+    service = DictionarySearchService(
+        providers=(
+            LexicalSearchProvider(
+                InMemoryRepository(
+                    [
+                        DictionaryEntry(
+                            source=DictionarySource.CORE,
+                            word="home",
+                            translation="house",
+                            examples=("home in example only",),
+                        )
+                    ]
+                )
+            ),
+            FailingSemanticSearchProvider(),
+        )
+    )
+
+    results = service.search("home", SearchMode.COMPLEX)
+    search_result = service.search_with_diagnostics("home", SearchMode.COMPLEX)
+
+    assert [entry.title for entry in results] == ["home - house"]
+    assert service.search("example", SearchMode.COMPLEX) == []
+    assert [entry.title for entry in search_result.entries] == ["home - house"]
+    assert search_result.requested_mode == SearchMode.COMPLEX
+    assert search_result.effective_mode == SearchMode.LITE
+    assert search_result.fallback_provider == "FailingSemanticSearchProvider"
+    assert search_result.fallback_reason == "embedding service is unavailable"
+    assert search_result.fallback_used
 
 
 def test_lite_search_uses_position_bonus_for_translation_tokens() -> None:

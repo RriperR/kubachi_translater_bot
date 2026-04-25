@@ -11,7 +11,7 @@ from .lexical import (
     LexicalSearchProvider,
     SearchProvider,
 )
-from .orchestrator import DictionarySearchService
+from .orchestrator import DictionarySearchService, SearchResult
 
 __all__ = [
     "DictionaryEntry",
@@ -23,5 +23,6 @@ __all__ = [
     "SearchMatch",
     "SearchMode",
     "SearchProvider",
+    "SearchResult",
     "format_entry",
 ]

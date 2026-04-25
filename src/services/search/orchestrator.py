@@ -2,12 +2,32 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from models import DictionaryEntry, DictionarySource, SearchMatch, SearchMode
 from normalization import normalize_query
 
 from .lexical import SearchProvider
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """Search response with fallback diagnostics for the Telegram layer."""
+
+    entries: list[DictionaryEntry]
+    requested_mode: SearchMode
+    effective_mode: SearchMode
+    fallback_provider: str | None = None
+    fallback_reason: str | None = None
+
+    @property
+    def fallback_used(self) -> bool:
+        """Return whether the original search mode was replaced by fallback mode."""
+        return self.fallback_reason is not None
 
 
 class DictionarySearchService:
@@ -34,9 +54,45 @@ class DictionarySearchService:
         Returns:
             Уникальные статьи, отсортированные по релевантности и приоритету источника.
         """
+        return self.search_with_diagnostics(query, mode).entries
+
+    def search_with_diagnostics(self, query: str, mode: SearchMode) -> SearchResult:
+        """Run search and include fallback metadata for observability.
+
+        Returns:
+            Search entries plus the effective mode and fallback reason, if any.
+        """
+        entries, fallback_provider, fallback_reason = self._search_entries(query, mode)
+        return SearchResult(
+            entries=entries,
+            requested_mode=mode,
+            effective_mode=SearchMode.LITE if fallback_reason is not None else mode,
+            fallback_provider=fallback_provider,
+            fallback_reason=fallback_reason,
+        )
+
+    def _search_entries(
+        self,
+        query: str,
+        mode: SearchMode,
+    ) -> tuple[list[DictionaryEntry], str | None, str | None]:
         matches: list[SearchMatch] = []
         for provider in self._providers:
-            matches.extend(provider.search(query, mode))
+            try:
+                matches.extend(provider.search(query, mode))
+            except Exception as exc:
+                if mode == SearchMode.COMPLEX and getattr(
+                    provider,
+                    "fallback_to_lite_on_error",
+                    False,
+                ):
+                    logger.warning(
+                        "Complex search provider failed, falling back to lite mode",
+                        exc_info=True,
+                    )
+                    entries, _, _ = self._search_entries(query, SearchMode.LITE)
+                    return entries, type(provider).__name__, str(exc)
+                raise
 
         grouped_matches: dict[tuple[str, str], list[SearchMatch]] = {}
         for match in matches:
@@ -60,7 +116,7 @@ class DictionarySearchService:
                 normalize_query(item.entry.title),
             ),
         )
-        return [match.entry for match in sorted_matches]
+        return [match.entry for match in sorted_matches], None, None
 
     @staticmethod
     def _filter_semantic_noise(

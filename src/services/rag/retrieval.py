@@ -19,6 +19,8 @@ _MAX_DISTANCE_DELTA_WITHOUT_OVERLAP = 0.015
 class PgvectorSearchProvider:
     """Семантический провайдер поиска поверх pgvector."""
 
+    fallback_to_lite_on_error = True
+
     def __init__(
         self,
         repository: PostgresDictionaryRepository,
